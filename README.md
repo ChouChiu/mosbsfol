@@ -1,5 +1,14 @@
 # MOSBSFOL — macOS Bull Shit Feature On Linux
 
+> [!CAUTION]
+> 免责声明：本项目（包括全部源代码、文档与 README）由 AI（大语言模型）辅助生成，可能存在错误、遗漏或过时信息，仅供参考、学习与兼容性测试，不构成任何形式的保证。
+>
+> 生成的 macOS 痕迹仅应在自有设备或已获授权的环境中使用；请勿将其用于干扰他人设备、数据或任何非法用途。
+>
+> 本项目与 Apple Inc. 无任何关联，未获得其认可或背书；文中提及的商标归其各自权利人所有。
+>
+> 使用本项目所产生的任何直接或间接后果，由使用者自行承担；项目作者与生成内容的 AI 均不承担任何责任。
+
 在 Linux 上复刻 macOS 那些“特有但没什么必要”的文件系统行为。
 
 灵感来自 [awesome-windows-on-linux issue #2](https://github.com/windowix/awesome-windows-on-linux/issues/2)。
