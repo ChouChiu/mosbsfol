@@ -1,0 +1,5 @@
+MOSBSFOL - macOS Bull Shit Feature On Linux
+Copyright 2026 ChouChiu
+
+MOSBSFOL is a feature-driven Rust project that reproduces several
+thoroughly non-essential macOS file-system behaviours on Linux.

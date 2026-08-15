@@ -1,0 +1,31 @@
+[package]
+name = "mosbsfol"
+version = "0.1.0"
+edition = "2021"
+description = "MOSBSFOL - macOS Bull Shit Feature On Linux"
+authors = ["ChouChiu"]
+license = "Apache-2.0"
+repository = "https://github.com/ChouChiu/mosbsfol"
+homepage = "https://github.com/ChouChiu/mosbsfol"
+documentation = "https://docs.rs/mosbsfol"
+
+# Feature-driven build: every macOS behaviour can be compiled in/out.
+[features]
+default = ["dsstore", "appledouble", "maczip", "plist", "xattr", "volumetrace"]
+dsstore = []
+appledouble = []
+maczip = ["appledouble"]
+plist = []
+xattr = []
+volumetrace = []
+
+# Zero third-party dependencies.  All formats are implemented from their
+# public reverse-engineering notes.
+
+[[bin]]
+name = "mosbsfol"
+path = "src/main.rs"
+
+[profile.release]
+strip = true
+lto = true
