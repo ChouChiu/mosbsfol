@@ -188,30 +188,71 @@ pub fn poop_tree(
     use_type_codes: bool,
     dry_run: bool,
 ) -> Result<Vec<PathBuf>> {
-    fsx::require_dir(root)?;
-    let mut out = Vec::new();
     poop_tree_inner(
         root,
         recursive,
         include_dirs,
         use_type_codes,
+        false,
+        dry_run,
+    )
+}
+
+/// [`poop_tree`], but hidden files and directories are left alone.
+///
+/// The automatic `autopoop` passes use this so a second pass does not
+/// create `._*` sidecars inside the `.Spotlight-V100` / `.fseventsd` /
+/// `.Trashes` droppings from the first pass.
+pub fn poop_tree_skipping_hidden(
+    root: &Path,
+    recursive: bool,
+    include_dirs: bool,
+    use_type_codes: bool,
+    dry_run: bool,
+) -> Result<Vec<PathBuf>> {
+    poop_tree_inner(root, recursive, include_dirs, use_type_codes, true, dry_run)
+}
+
+fn poop_tree_inner(
+    root: &Path,
+    recursive: bool,
+    include_dirs: bool,
+    use_type_codes: bool,
+    skip_hidden: bool,
+    dry_run: bool,
+) -> Result<Vec<PathBuf>> {
+    fsx::require_dir(root)?;
+    let mut out = Vec::new();
+    poop_tree_inner_dir(
+        root,
+        recursive,
+        include_dirs,
+        use_type_codes,
+        skip_hidden,
         dry_run,
         &mut out,
     )?;
     Ok(out)
 }
 
-fn poop_tree_inner(
+fn poop_tree_inner_dir(
     dir: &Path,
     recursive: bool,
     include_dirs: bool,
     use_type_codes: bool,
+    skip_hidden: bool,
     dry_run: bool,
     out: &mut Vec<PathBuf>,
 ) -> Result<()> {
     for child in fsx::sorted_dir_entries(dir)? {
         let name = file_name(&child);
-        if name.starts_with("._") || name == ".DS_Store" {
+        // `Icon\r` is the volume-root folder icon marker created by
+        // `volumetrace`; a Finder-style sidecar for it would just be more
+        // droppings on the next autopoop pass.
+        if name.starts_with("._")
+            || name == ".DS_Store"
+            || (skip_hidden && (name.starts_with('.') || name == "Icon\r"))
+        {
             continue;
         }
         let meta = fsx::symlink_metadata(&child)?;
@@ -220,11 +261,12 @@ fn poop_tree_inner(
         }
         if meta.is_dir() {
             if recursive {
-                poop_tree_inner(
+                poop_tree_inner_dir(
                     &child,
                     recursive,
                     include_dirs,
                     use_type_codes,
+                    skip_hidden,
                     dry_run,
                     out,
                 )?;
