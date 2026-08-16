@@ -4,24 +4,47 @@
 
 use std::path::{Path, PathBuf};
 
+use clap::{value_parser, Arg, ArgMatches, Command};
+
 use super as maczip;
-use crate::shared::cli::{first_positional, has_flag};
-use crate::shared::util::{Error, Result};
+use crate::shared::cli::dry_run_flag;
+use crate::shared::util::Result;
 
-pub const HELP: &str = r#"
-    maczip        maczip DIR [OUT.zip] [--dry-run]"#;
+pub fn command() -> Command {
+    Command::new("maczip")
+        .about("Create a Finder-style ZIP with __MACOSX AppleDouble entries")
+        .alias("zip")
+        .arg(
+            Arg::new("dir")
+                .value_parser(value_parser!(PathBuf))
+                .required(true)
+                .value_name("DIR")
+                .help("Directory to archive"),
+        )
+        .arg(
+            Arg::new("output")
+                .value_parser(value_parser!(PathBuf))
+                .required(false)
+                .value_name("OUT.zip")
+                .help("Output ZIP path (defaults to DIR.zip next to DIR)"),
+        )
+        .arg(dry_run_flag())
+}
 
-pub fn run(args: &[String]) -> Result<()> {
-    let dir = PathBuf::from(first_positional(args, true).ok_or_else(|| Error::new("missing DIR"))?);
-    let output = match first_positional(&args[1..], true) {
-        Some(p) => PathBuf::from(p),
+pub fn execute(matches: &ArgMatches) -> Result<()> {
+    let dir = matches
+        .get_one::<PathBuf>("dir")
+        .expect("clap requires DIR")
+        .clone();
+    let output = match matches.get_one::<PathBuf>("output") {
+        Some(path) => path.clone(),
         None => {
             let parent = dir.parent().unwrap_or_else(|| Path::new("."));
             let name = dir.file_name().unwrap_or_default().to_string_lossy();
             parent.join(format!("{name}.zip"))
         }
     };
-    let dry_run = has_flag(args, &["--dry-run"]);
+    let dry_run = matches.get_flag("dry_run");
     let (_, names) = maczip::build_maczip(&dir)?;
     if dry_run {
         for name in names {

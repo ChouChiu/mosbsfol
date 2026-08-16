@@ -2,92 +2,122 @@
 
 //! Application core: feature-independent CLI bootstrap and dispatch.
 //!
-//! Each feature owns its command implementation and help text under
-//! `src/features/<feature>/cli.rs`.  This module only routes argv and
-//! composes the help screen from the features that were compiled in.
+//! Each feature owns its [`clap::Command`] definition and execution under
+//! `src/features/<feature>/cli.rs`.  This module only composes the
+//! feature-gated root command and dispatches parsed matches.
 
-use crate::shared::util::{Error, Result};
+use anyhow::{anyhow, Result};
+use clap::error::ErrorKind;
+use clap::Command;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[allow(unused_variables)]
 pub fn run(args: &[String]) -> Result<()> {
-    if args.is_empty()
-        || args
-            .iter()
-            .any(|a| a == "-h" || a == "--help" || a == "help")
-    {
-        print_help();
+    // Preserve the two pre-clap conveniences that are not flag-shaped.
+    if args.first().is_some_and(|a| a == "help") {
+        root_command().print_help()?;
         return Ok(());
     }
-    if args[0] == "--version" || args[0] == "version" {
+    if args.first().is_some_and(|a| a == "version") {
         println!("mosbsfol {VERSION}");
         return Ok(());
     }
 
-    match args[0].as_str() {
-        #[cfg(feature = "dsstore")]
-        "dsstore" => crate::features::dsstore::cli::run(&args[1..]),
-        #[cfg(all(feature = "appledouble", feature = "dsstore"))]
-        "usb" => crate::features::appledouble::cli::run(&args[1..]),
-        #[cfg(feature = "maczip")]
-        "maczip" | "zip" => crate::features::maczip::cli::run(&args[1..]),
-        #[cfg(feature = "plist")]
-        "plist" => crate::features::plist::cli::run(&args[1..]),
-        #[cfg(feature = "xattr")]
-        "xattr" => crate::features::xattr::cli::run(&args[1..]),
-        #[cfg(feature = "volumetrace")]
-        "trace" | "volumetrace" => crate::features::volumetrace::cli::run(&args[1..]),
-        #[cfg(feature = "dsstore")]
-        "poop" => {
-            let mut sub = vec!["poop".to_string()];
-            sub.extend_from_slice(&args[1..]);
-            crate::features::dsstore::cli::run(&sub)
+    // clap expects argv[0] to be the binary name; `args` contains argv[1..].
+    let argv = std::iter::once("mosbsfol").chain(args.iter().map(String::as_str));
+    match root_command().try_get_matches_from(argv) {
+        Ok(matches) => {
+            let Some((name, sub_matches)) = matches.subcommand() else {
+                root_command().print_help()?;
+                return Ok(());
+            };
+            match name {
+                #[cfg(feature = "dsstore")]
+                "dsstore" => Ok(crate::features::dsstore::cli::execute(sub_matches)?),
+                #[cfg(feature = "dsstore")]
+                "poop" => Ok(crate::features::dsstore::cli::execute_poop(sub_matches)?),
+                #[cfg(all(feature = "appledouble", feature = "dsstore"))]
+                "usb" => Ok(crate::features::appledouble::cli::execute(sub_matches)?),
+                #[cfg(feature = "maczip")]
+                "maczip" | "zip" => Ok(crate::features::maczip::cli::execute(sub_matches)?),
+                #[cfg(feature = "plist")]
+                "plist" => Ok(crate::features::plist::cli::execute(sub_matches)?),
+                #[cfg(feature = "xattr")]
+                "xattr" => Ok(crate::features::xattr::cli::execute(sub_matches)?),
+                #[cfg(feature = "volumetrace")]
+                "trace" | "volumetrace" => {
+                    Ok(crate::features::volumetrace::cli::execute(sub_matches)?)
+                }
+                other => Err(anyhow!("unknown command {other:?}")),
+            }
         }
-        other => Err(Error::new(format!(
-            "unknown command {other:?}; run `mosbsfol --help`"
-        ))),
+        Err(err) => match err.kind() {
+            ErrorKind::DisplayHelp
+            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+            | ErrorKind::DisplayVersion => {
+                err.print()?;
+                Ok(())
+            }
+            ErrorKind::InvalidSubcommand => Err(anyhow!(
+                "{}
+Run `mosbsfol --help` for usage.",
+                render_clap_error(&err)
+            )),
+            _ => Err(anyhow!(render_clap_error(&err))),
+        },
     }
 }
 
-fn print_help() {
-    println!("MOSBSFOL {VERSION} - macOS Bull Shit Feature On Linux");
+fn render_clap_error(err: &clap::Error) -> String {
+    let rendered = err.to_string();
+    rendered
+        .strip_prefix("error: ")
+        .unwrap_or(&rendered)
+        .trim_end()
+        .to_string()
+}
+
+#[allow(unused_mut)]
+fn root_command() -> Command {
+    let mut cmd = Command::new("mosbsfol")
+        .version(VERSION)
+        .about("MOSBSFOL - macOS Bull Shit Feature On Linux")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .disable_help_subcommand(true);
 
     #[cfg(feature = "dsstore")]
     {
-        print!("{}", crate::features::dsstore::cli::HELP);
-        println!();
+        cmd = cmd
+            .subcommand(crate::features::dsstore::cli::command())
+            .subcommand(crate::features::dsstore::cli::shortcut_command());
     }
 
     #[cfg(all(feature = "appledouble", feature = "dsstore"))]
     {
-        print!("{}", crate::features::appledouble::cli::HELP);
-        println!();
+        cmd = cmd.subcommand(crate::features::appledouble::cli::command());
     }
 
     #[cfg(feature = "maczip")]
     {
-        print!("{}", crate::features::maczip::cli::HELP);
-        println!();
+        cmd = cmd.subcommand(crate::features::maczip::cli::command());
     }
 
     #[cfg(feature = "plist")]
     {
-        print!("{}", crate::features::plist::cli::HELP);
-        println!();
+        cmd = cmd.subcommand(crate::features::plist::cli::command());
     }
 
     #[cfg(feature = "xattr")]
     {
-        print!("{}", crate::features::xattr::cli::HELP);
-        println!();
+        cmd = cmd.subcommand(crate::features::xattr::cli::command());
     }
 
     #[cfg(feature = "volumetrace")]
     {
-        print!("{}", crate::features::volumetrace::cli::HELP);
-        println!();
+        cmd = cmd.subcommand(crate::features::volumetrace::cli::command());
     }
 
-    #[cfg(feature = "dsstore")]
-    println!("\nShortcuts: `mosbsfol poop PATH` is `dsstore poop PATH`.");
+    cmd
 }

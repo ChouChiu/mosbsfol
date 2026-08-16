@@ -2,169 +2,329 @@
 
 //! CLI command owned by the `xattr` feature.
 
-use std::path::Path;
+use std::path::PathBuf;
+
+use clap::{value_parser, Arg, ArgAction, ArgMatches, Command};
 
 use super as xattr;
-use crate::shared::cli::{has_flag, need};
 use crate::shared::util::{Error, Result};
 
-pub const HELP: &str = r#"
-    xattr         xattr list FILE
-                  xattr get FILE NAME
-                  xattr set FILE NAME VALUE [--hex]
-                  xattr del FILE NAME
-                  xattr quarantine FILE
-                  xattr finderinfo FILE [TYPE CREATOR]
-                  xattr wherefroms FILE URL...
-                  xattr comment FILE TEXT
-                  xattr tag FILE [COLOR|none]
-                  xattr hide FILE [yes|no]
-                  xattr resourcefork FILE [HEX]"#;
+pub fn command() -> Command {
+    Command::new("xattr")
+        .about("Read and write macOS-style extended attributes")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(
+            Command::new("list")
+                .about("List xattrs on FILE")
+                .arg(file_arg()),
+        )
+        .subcommand(
+            Command::new("get")
+                .about("Read one xattr")
+                .arg(file_arg())
+                .arg(name_arg()),
+        )
+        .subcommand(
+            Command::new("set")
+                .about("Write one xattr")
+                .arg(file_arg())
+                .arg(name_arg())
+                .arg(value_arg())
+                .arg(hex_flag()),
+        )
+        .subcommand(
+            Command::new("del")
+                .about("Remove one xattr")
+                .alias("rm")
+                .arg(file_arg())
+                .arg(name_arg()),
+        )
+        .subcommand(
+            Command::new("quarantine")
+                .about("Set com.apple.quarantine")
+                .arg(file_arg()),
+        )
+        .subcommand(
+            Command::new("finderinfo")
+                .about("Set the 32-byte com.apple.FinderInfo value")
+                .arg(file_arg())
+                .arg(
+                    Arg::new("type_code")
+                        .required(false)
+                        .value_name("TYPE")
+                        .help("Four-character type code (default: ????)"),
+                )
+                .arg(
+                    Arg::new("creator_code")
+                        .required(false)
+                        .value_name("CREATOR")
+                        .help("Four-character creator code (default: MACS)"),
+                ),
+        )
+        .subcommand(
+            Command::new("wherefroms")
+                .about("Set com.apple.metadata:kMDItemWhereFroms")
+                .arg(file_arg())
+                .arg(
+                    Arg::new("urls")
+                        .value_parser(value_parser!(String))
+                        .required(true)
+                        .value_name("URL")
+                        .num_args(1..)
+                        .action(ArgAction::Append)
+                        .help("One or more source URLs"),
+                ),
+        )
+        .subcommand(
+            Command::new("comment")
+                .about("Set com.apple.metadata:kMDItemFinderComment")
+                .arg(file_arg())
+                .arg(
+                    Arg::new("text")
+                        .required(false)
+                        .default_value("")
+                        .value_name("TEXT")
+                        .help("Comment text (default: empty)"),
+                ),
+        )
+        .subcommand(
+            Command::new("tag")
+                .about("Set or read the Finder colour tag")
+                .arg(file_arg())
+                .arg(
+                    Arg::new("color")
+                        .required(false)
+                        .value_name("COLOR")
+                        .help("none/gray/green/purple/blue/yellow/red/orange"),
+                ),
+        )
+        .subcommand(
+            Command::new("hide")
+                .about("Set or read the Finder hidden flag")
+                .arg(file_arg())
+                .arg(
+                    Arg::new("value")
+                        .required(false)
+                        .value_name("YES|NO")
+                        .help("yes/no/true/false/on/off/1/0"),
+                ),
+        )
+        .subcommand(
+            Command::new("resourcefork")
+                .about("Set or read com.apple.ResourceFork")
+                .arg(file_arg())
+                .arg(
+                    Arg::new("hex")
+                        .required(false)
+                        .value_name("HEX")
+                        .help("Hex-encoded resource fork bytes"),
+                ),
+        )
+}
 
-pub fn run(args: &[String]) -> Result<()> {
-    if args.is_empty() {
-        return Err(Error::new(
+fn file_arg() -> Arg {
+    Arg::new("file")
+        .value_parser(value_parser!(PathBuf))
+        .required(true)
+        .value_name("FILE")
+        .help("Target file or directory")
+}
+
+fn name_arg() -> Arg {
+    Arg::new("name")
+        .required(true)
+        .value_name("NAME")
+        .help("Extended attribute name")
+}
+
+fn value_arg() -> Arg {
+    Arg::new("value")
+        .required(true)
+        .value_name("VALUE")
+        .help("Raw value, or hex bytes with --hex")
+}
+
+fn hex_flag() -> Arg {
+    Arg::new("hex")
+        .long("hex")
+        .action(ArgAction::SetTrue)
+        .help("Treat VALUE as hex-encoded bytes")
+}
+
+pub fn execute(matches: &ArgMatches) -> Result<()> {
+    match matches.subcommand() {
+        Some(("list", matches)) => execute_list(matches),
+        Some(("get", matches)) => execute_get(matches),
+        Some(("set", matches)) => execute_set(matches),
+        Some(("del" | "rm", matches)) => execute_del(matches),
+        Some(("quarantine", matches)) => execute_quarantine(matches),
+        Some(("finderinfo", matches)) => execute_finderinfo(matches),
+        Some(("wherefroms", matches)) => execute_wherefroms(matches),
+        Some(("comment", matches)) => execute_comment(matches),
+        Some(("tag", matches)) => execute_tag(matches),
+        Some(("hide", matches)) => execute_hide(matches),
+        Some(("resourcefork", matches)) => execute_resourcefork(matches),
+        Some((other, _)) => Err(Error::new(format!("unknown xattr subcommand {other:?}"))),
+        None => Err(Error::new(
             "usage: mosbsfol xattr <list|get|set|del|quarantine|finderinfo|wherefroms|comment|tag|hide|resourcefork> ...",
-        ));
+        )),
     }
-    match args[0].as_str() {
-        "list" => {
-            let path = need(&args[1..], 0, "file path")?;
-            let names = xattr::list(Path::new(&path))?;
-            for name in names {
-                let shown = xattr::display_name(&name);
-                match xattr::get(Path::new(&path), &name) {
-                    Ok(raw) => println!("{shown}: {}", xattr::display_value(&shown, &raw)),
-                    Err(e) => println!("{shown}: <{e}>"),
-                }
-            }
-            Ok(())
+}
+
+fn execute_list(matches: &ArgMatches) -> Result<()> {
+    let path = file(matches);
+    let names = xattr::list(path)?;
+    for name in names {
+        let shown = xattr::display_name(&name);
+        match xattr::get(path, &name) {
+            Ok(raw) => println!("{shown}: {}", xattr::display_value(&shown, &raw)),
+            Err(e) => println!("{shown}: <{e}>"),
         }
-        "get" => {
-            let path = need(&args[1..], 0, "file path")?;
-            let name = need(&args[1..], 1, "attribute name")?;
-            let raw = xattr::get(Path::new(&path), &name)?;
-            println!("{}", xattr::display_value(&name, &raw));
-            Ok(())
-        }
-        "set" => {
-            let path = need(&args[1..], 0, "file path")?;
-            let name = need(&args[1..], 1, "attribute name")?;
-            let value = need(&args[1..], 2, "attribute value")?;
-            let raw = if has_flag(&args[1..], &["--hex"]) {
-                let mut out = Vec::new();
-                if value.len() % 2 != 0 {
-                    return Err(Error::new("odd-length hex value"));
-                }
-                for i in (0..value.len()).step_by(2) {
-                    out.push(
-                        u8::from_str_radix(&value[i..i + 2], 16)
-                            .map_err(|_| Error::new("invalid hex value"))?,
-                    );
-                }
-                out
-            } else {
-                value.into_bytes()
-            };
-            xattr::set(Path::new(&path), &name, &raw)?;
-            Ok(())
-        }
-        "del" | "rm" => {
-            let path = need(&args[1..], 0, "file path")?;
-            let name = need(&args[1..], 1, "attribute name")?;
-            xattr::remove(Path::new(&path), &name)?;
-            Ok(())
-        }
-        "quarantine" => {
-            let path = need(&args[1..], 0, "file path")?;
-            xattr::set_quarantine(Path::new(&path))?;
-            let raw = xattr::get(Path::new(&path), "com.apple.quarantine")?;
-            println!("com.apple.quarantine: {}", String::from_utf8_lossy(&raw));
-            Ok(())
-        }
-        "finderinfo" => {
-            let path = need(&args[1..], 0, "file path")?;
-            let type_code = args
-                .get(2)
-                .map(|s| fourcc_arg(s))
-                .transpose()?
-                .unwrap_or(*b"????");
-            let creator = args
-                .get(3)
-                .map(|s| fourcc_arg(s))
-                .transpose()?
-                .unwrap_or(*b"MACS");
-            xattr::set_finder_info(Path::new(&path), &type_code, &creator)?;
-            Ok(())
-        }
-        "wherefroms" => {
-            let path = need(&args[1..], 0, "file path")?;
-            if args.len() < 3 {
-                return Err(Error::new("usage: mosbsfol xattr wherefroms FILE URL..."));
-            }
-            let urls: Vec<String> = args[2..].to_vec();
-            xattr::set_where_froms(Path::new(&path), &urls)?;
-            let raw = xattr::get(Path::new(&path), "com.apple.metadata:kMDItemWhereFroms")?;
-            println!(
-                "{}",
-                xattr::display_value("com.apple.metadata:kMDItemWhereFroms", &raw)
-            );
-            Ok(())
-        }
-        "comment" => {
-            let path = need(&args[1..], 0, "file path")?;
-            let text = args.get(2).map(|s| s.as_str()).unwrap_or("");
-            xattr::set_finder_comment(Path::new(&path), text)?;
-            Ok(())
-        }
-        "tag" => {
-            let path = need(&args[1..], 0, "file path")?;
-            if let Some(color) = args.get(2) {
-                xattr::set_finder_tag(Path::new(&path), color)?;
-            }
-            println!(
-                "tag: {}",
-                xattr::finder_tag_name(xattr::get_finder_tag(Path::new(&path)))
-            );
-            Ok(())
-        }
-        "hide" => {
-            let path = need(&args[1..], 0, "file path")?;
-            if let Some(value) = args.get(2) {
-                let hidden = match value.to_ascii_lowercase().as_str() {
-                    "yes" | "true" | "on" | "1" => true,
-                    "no" | "false" | "off" | "0" => false,
-                    other => return Err(Error::new(format!("expected yes/no, got {other:?}"))),
-                };
-                xattr::set_hidden(Path::new(&path), hidden)?;
-            }
-            println!("hidden: {}", xattr::is_hidden(Path::new(&path)));
-            Ok(())
-        }
-        "resourcefork" => {
-            let path = need(&args[1..], 0, "file path")?;
-            if let Some(hex) = args.get(2) {
-                if !hex.len().is_multiple_of(2) {
-                    return Err(Error::new("odd-length hex resource fork"));
-                }
-                let mut data = Vec::with_capacity(hex.len() / 2);
-                for i in (0..hex.len()).step_by(2) {
-                    data.push(
-                        u8::from_str_radix(&hex[i..i + 2], 16)
-                            .map_err(|_| Error::new("invalid hex resource fork"))?,
-                    );
-                }
-                xattr::set_resource_fork(Path::new(&path), &data)?;
-            }
-            let raw = xattr::get_resource_fork(Path::new(&path))?;
-            println!(
-                "com.apple.ResourceFork: {}",
-                crate::shared::util::hex_dump(&raw, 64)
-            );
-            Ok(())
-        }
-        other => Err(Error::new(format!("unknown xattr subcommand {other:?}"))),
     }
+    Ok(())
+}
+
+fn execute_get(matches: &ArgMatches) -> Result<()> {
+    let path = file(matches);
+    let name = matches
+        .get_one::<String>("name")
+        .expect("clap requires NAME");
+    let raw = xattr::get(path, name)?;
+    println!("{}", xattr::display_value(name, &raw));
+    Ok(())
+}
+
+fn execute_set(matches: &ArgMatches) -> Result<()> {
+    let path = file(matches);
+    let name = matches
+        .get_one::<String>("name")
+        .expect("clap requires NAME");
+    let value = matches
+        .get_one::<String>("value")
+        .expect("clap requires VALUE");
+    let raw = if matches.get_flag("hex") {
+        decode_hex(value, "hex value")?
+    } else {
+        value.clone().into_bytes()
+    };
+    xattr::set(path, name, &raw)
+}
+
+fn execute_del(matches: &ArgMatches) -> Result<()> {
+    let path = file(matches);
+    let name = matches
+        .get_one::<String>("name")
+        .expect("clap requires NAME");
+    xattr::remove(path, name)
+}
+
+fn execute_quarantine(matches: &ArgMatches) -> Result<()> {
+    let path = file(matches);
+    xattr::set_quarantine(path)?;
+    let raw = xattr::get(path, "com.apple.quarantine")?;
+    println!("com.apple.quarantine: {}", String::from_utf8_lossy(&raw));
+    Ok(())
+}
+
+fn execute_finderinfo(matches: &ArgMatches) -> Result<()> {
+    let path = file(matches);
+    let type_code = matches
+        .get_one::<String>("type_code")
+        .map(|s| fourcc_arg(s))
+        .transpose()?
+        .unwrap_or(*b"????");
+    let creator = matches
+        .get_one::<String>("creator_code")
+        .map(|s| fourcc_arg(s))
+        .transpose()?
+        .unwrap_or(*b"MACS");
+    xattr::set_finder_info(path, &type_code, &creator)
+}
+
+fn execute_wherefroms(matches: &ArgMatches) -> Result<()> {
+    let path = file(matches);
+    let urls: Vec<String> = matches
+        .get_many::<String>("urls")
+        .map(|values| values.cloned().collect())
+        .unwrap_or_default();
+    xattr::set_where_froms(path, &urls)?;
+    let raw = xattr::get(path, "com.apple.metadata:kMDItemWhereFroms")?;
+    println!(
+        "{}",
+        xattr::display_value("com.apple.metadata:kMDItemWhereFroms", &raw)
+    );
+    Ok(())
+}
+
+fn execute_comment(matches: &ArgMatches) -> Result<()> {
+    let path = file(matches);
+    let text = matches
+        .get_one::<String>("text")
+        .map(String::as_str)
+        .unwrap_or("");
+    xattr::set_finder_comment(path, text)
+}
+
+fn execute_tag(matches: &ArgMatches) -> Result<()> {
+    let path = file(matches);
+    if let Some(color) = matches.get_one::<String>("color") {
+        xattr::set_finder_tag(path, color)?;
+    }
+    println!(
+        "tag: {}",
+        xattr::finder_tag_name(xattr::get_finder_tag(path))
+    );
+    Ok(())
+}
+
+fn execute_hide(matches: &ArgMatches) -> Result<()> {
+    let path = file(matches);
+    if let Some(value) = matches.get_one::<String>("value") {
+        let hidden = match value.to_ascii_lowercase().as_str() {
+            "yes" | "true" | "on" | "1" => true,
+            "no" | "false" | "off" | "0" => false,
+            other => return Err(Error::new(format!("expected yes/no, got {other:?}"))),
+        };
+        xattr::set_hidden(path, hidden)?;
+    }
+    println!("hidden: {}", xattr::is_hidden(path));
+    Ok(())
+}
+
+fn execute_resourcefork(matches: &ArgMatches) -> Result<()> {
+    let path = file(matches);
+    if let Some(hex) = matches.get_one::<String>("hex") {
+        let data = decode_hex(hex, "hex resource fork")?;
+        xattr::set_resource_fork(path, &data)?;
+    }
+    let raw = xattr::get_resource_fork(path)?;
+    println!(
+        "com.apple.ResourceFork: {}",
+        crate::shared::util::hex_dump(&raw, 64)
+    );
+    Ok(())
+}
+
+fn file(matches: &ArgMatches) -> &std::path::Path {
+    matches
+        .get_one::<PathBuf>("file")
+        .expect("clap requires FILE")
+        .as_path()
+}
+
+fn decode_hex(hex: &str, what: &str) -> Result<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) {
+        return Err(Error::new(format!("odd-length {what}")));
+    }
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    for i in (0..hex.len()).step_by(2) {
+        out.push(
+            u8::from_str_radix(&hex[i..i + 2], 16)
+                .map_err(|_| Error::new(format!("invalid {what}")))?,
+        );
+    }
+    Ok(out)
 }
 
 fn fourcc_arg(s: &str) -> Result<[u8; 4]> {

@@ -3,8 +3,8 @@
 //! Shared infrastructure: no macOS behaviour of its own, but used by
 //! several features.
 //!
-//! * `bplist`: binary property-list codec
-//! * `cli`: command-line argument helpers
+//! * `bplist`: thin `bplist00` helpers over the `plist` crate
+//! * `cli`: shared [`clap`] argument builders
 //! * `mac`: small Macintosh data layouts (e.g. FInfo/FXInfo)
 //! * `util`: UTF-16BE, FourCC, alignment, error type
 

@@ -2,42 +2,93 @@
 
 //! CLI command owned by the `plist` feature.
 
-use std::path::Path;
+use std::path::PathBuf;
+
+use clap::{value_parser, Arg, ArgAction, ArgMatches, Command};
 
 use super as plist;
 use crate::shared::bplist;
-use crate::shared::cli::{has_flag, need, positionals_after};
-use crate::shared::util::{Error, Result};
+use crate::shared::util::Result;
 
-pub const HELP: &str = r#"
-    plist         plist write FILE [key=value ...] [--xml]
-                  plist read FILE
-                  value syntax: true/false, integer, 0xHEX, 1.5,
-                                @base64:..., @hex:..."#;
+pub fn command() -> Command {
+    Command::new("plist")
+        .about("Read and write XML or binary property lists")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(write_command())
+        .subcommand(read_command())
+}
 
-pub fn run(args: &[String]) -> Result<()> {
-    if args.is_empty() {
-        return Err(Error::new("usage: mosbsfol plist <write|read> ..."));
-    }
-    match args[0].as_str() {
-        "write" | "create" => {
-            let path = need(&args[1..], 0, "output plist path")?;
-            let xml = has_flag(&args[1..], &["--xml"]);
-            let kv: Vec<String> = positionals_after(&args[1..], 1);
-            let value = plist::dict_from_args(&kv)?;
-            plist::write_file(Path::new(&path), &value, !xml)?;
-            println!("{}", path);
+fn write_command() -> Command {
+    Command::new("write")
+        .about("Write a property list from key=value arguments")
+        .alias("create")
+        .arg(
+            Arg::new("file")
+                .value_parser(value_parser!(PathBuf))
+                .required(true)
+                .value_name("FILE")
+                .help("Output plist path"),
+        )
+        .arg(
+            Arg::new("key_values")
+                .value_parser(value_parser!(String))
+                .value_name("key=value")
+                .num_args(0..)
+                .action(ArgAction::Append)
+                .help("Dictionary entries: true/false, integer, 0xHEX, 1.5, @base64:..., @hex:..."),
+        )
+        .arg(
+            Arg::new("xml")
+                .long("xml")
+                .action(ArgAction::SetTrue)
+                .help("Write XML instead of binary bplist00"),
+        )
+}
+
+fn read_command() -> Command {
+    Command::new("read")
+        .about("Read and display a property list")
+        .alias("cat")
+        .arg(
+            Arg::new("file")
+                .value_parser(value_parser!(PathBuf))
+                .required(true)
+                .value_name("FILE")
+                .help("Plist path to read"),
+        )
+}
+
+pub fn execute(matches: &ArgMatches) -> Result<()> {
+    match matches.subcommand() {
+        Some(("write" | "create", matches)) => {
+            let file = matches
+                .get_one::<PathBuf>("file")
+                .expect("clap requires FILE");
+            let xml = matches.get_flag("xml");
+            let key_values: Vec<String> = matches
+                .get_many::<String>("key_values")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default();
+            let value = plist::dict_from_args(&key_values)?;
+            plist::write_file(file, &value, !xml)?;
+            println!("{}", file.display());
             println!("{}", bplist::to_json(&value));
             Ok(())
         }
-        "read" | "cat" => {
-            let path = need(&args[1..], 0, "plist path")?;
-            let value = plist::read_file(Path::new(&path))?;
+        Some(("read" | "cat", matches)) => {
+            let file = matches
+                .get_one::<PathBuf>("file")
+                .expect("clap requires FILE");
+            let value = plist::read_file(file)?;
             println!("{}", bplist::to_json(&value));
             Ok(())
         }
-        other => Err(Error::new(format!(
+        Some((other, _)) => Err(crate::shared::util::Error::new(format!(
             "unknown plist subcommand {other:?} (write|read)"
         ))),
+        None => Err(crate::shared::util::Error::new(
+            "usage: mosbsfol plist <write|read> ...",
+        )),
     }
 }

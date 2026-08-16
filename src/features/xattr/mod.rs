@@ -1,48 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Thin wrapper around the Linux `l*` extended-attribute syscalls, plus
-//! generators for the macOS `com.apple.*` namespace.
+//! macOS-flavoured extended attributes on top of the maintained
+//! [`xattr`] crate.
 //!
-//! The `l` variants are used deliberately: they operate on the symlink
-//! itself, which matches Finder/`xattr` behaviour on macOS.
+//! The non-dereferencing variants are used deliberately: they operate on
+//! the symlink itself, which matches Finder/`xattr` behaviour on macOS.
 
 pub mod cli;
 
-use std::ffi::CString;
-use std::os::unix::ffi::OsStrExt;
+use std::io;
 use std::path::Path;
 
 use crate::shared::bplist::{self, Plist};
 use crate::shared::util::{Error, Result};
-
-#[cfg(unix)]
-#[link(name = "c")]
-unsafe extern "C" {
-    fn llistxattr(path: *const std::ffi::c_char, list: *mut std::ffi::c_char, size: usize)
-        -> isize;
-    fn lgetxattr(
-        path: *const std::ffi::c_char,
-        name: *const std::ffi::c_char,
-        value: *mut std::ffi::c_void,
-        size: usize,
-    ) -> isize;
-    fn lsetxattr(
-        path: *const std::ffi::c_char,
-        name: *const std::ffi::c_char,
-        value: *const std::ffi::c_void,
-        size: usize,
-        flags: std::ffi::c_int,
-    ) -> std::ffi::c_int;
-    fn lremovexattr(
-        path: *const std::ffi::c_char,
-        name: *const std::ffi::c_char,
-    ) -> std::ffi::c_int;
-}
-
-fn path_c(path: &Path) -> Result<CString> {
-    CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| Error::new("path contains an interior NUL byte"))
-}
 
 /// Linux requires an xattr namespace.  Bare macOS-style names such as
 /// `com.apple.quarantine` are stored in the `user.` namespace and shown
@@ -65,113 +35,45 @@ pub fn display_name(name: &str) -> String {
         .unwrap_or_else(|| name.to_string())
 }
 
-fn name_c(name: &str) -> Result<CString> {
-    let kernel = kernel_name(name);
-    CString::new(kernel.as_bytes()).map_err(|_| Error::new("xattr name contains NUL"))
-}
-
-fn last_os_error(what: &str, path: &Path) -> Error {
-    let e = std::io::Error::last_os_error();
+fn xattr_error(what: &str, path: &Path, e: io::Error) -> Error {
     let kind = e.raw_os_error().unwrap_or(0);
     if kind == 95 {
         Error::new(format!(
-            "{} on {}: operation not supported by this filesystem \
+            "{what} on {}: operation not supported by this filesystem \
              (mount with user_xattr, or use an AppleDouble sidecar)",
-            what,
             path.display()
         ))
     } else {
-        Error::new(format!("{} on {}: {e}", what, path.display()))
+        Error::new(format!("{what} on {}: {e}", path.display()))
     }
 }
 
 /// List xattr names (NUL-separated by the kernel).
 pub fn list(path: &Path) -> Result<Vec<String>> {
-    let p = path_c(path)?;
-    unsafe {
-        let len = llistxattr(p.as_ptr(), std::ptr::null_mut(), 0);
-        if len < 0 {
-            return Err(last_os_error("listxattr", path));
-        }
-        if len == 0 {
-            return Ok(Vec::new());
-        }
-        let mut buf = vec![0u8; len as usize];
-        let got = llistxattr(p.as_ptr(), buf.as_mut_ptr().cast(), buf.len());
-        if got < 0 {
-            return Err(last_os_error("listxattr", path));
-        }
-        buf.truncate(got as usize);
-        Ok(buf
-            .split(|b| *b == 0)
-            .filter(|s| !s.is_empty())
-            .map(|s| String::from_utf8_lossy(s).into_owned())
-            .collect())
-    }
+    let attrs = xattr::list(path).map_err(|e| xattr_error("listxattr", path, e))?;
+    Ok(attrs
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect())
 }
 
 /// Read one xattr as raw bytes.
 pub fn get(path: &Path, name: &str) -> Result<Vec<u8>> {
-    let p = path_c(path)?;
-    let n = name_c(name)?;
-    unsafe {
-        let len = lgetxattr(p.as_ptr(), n.as_ptr(), std::ptr::null_mut(), 0);
-        if len < 0 {
-            return Err(last_os_error(&format!("getxattr {name}"), path));
-        }
-        let mut buf = vec![0u8; len as usize];
-        let got = lgetxattr(p.as_ptr(), n.as_ptr(), buf.as_mut_ptr().cast(), buf.len());
-        if got < 0 {
-            return Err(last_os_error(&format!("getxattr {name}"), path));
-        }
-        buf.truncate(got as usize);
-        Ok(buf)
-    }
+    let what = format!("getxattr {name}");
+    xattr::get(path, kernel_name(name))
+        .map_err(|e| xattr_error(&what, path, e))?
+        .ok_or_else(|| Error::new(format!("{what} on {}: attribute not found", path.display())))
 }
 
 /// Set one xattr.
 pub fn set(path: &Path, name: &str, value: &[u8]) -> Result<()> {
-    let p = path_c(path)?;
-    let n = name_c(name)?;
-    unsafe {
-        if lsetxattr(
-            p.as_ptr(),
-            n.as_ptr(),
-            value.as_ptr().cast(),
-            value.len(),
-            0,
-        ) != 0
-        {
-            return Err(last_os_error(&format!("setxattr {name}"), path));
-        }
-    }
-    Ok(())
+    let what = format!("setxattr {name}");
+    xattr::set(path, kernel_name(name), value).map_err(|e| xattr_error(&what, path, e))
 }
 
 /// Remove one xattr.
 pub fn remove(path: &Path, name: &str) -> Result<()> {
-    let p = path_c(path)?;
-    let n = name_c(name)?;
-    unsafe {
-        if lremovexattr(p.as_ptr(), n.as_ptr()) != 0 {
-            return Err(last_os_error(&format!("removexattr {name}"), path));
-        }
-    }
-    Ok(())
-}
-
-fn pseudo_uuid() -> String {
-    let now = crate::shared::util::unix_now();
-    let micros = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_micros())
-        .unwrap_or(0);
-    format!(
-        "{now:08x}-{micros:04x}-4{pid:03x}-9{seq:03x}-{time:012x}",
-        pid = std::process::id() & 0xfff,
-        seq = micros & 0xfff,
-        time = now
-    )
+    let what = format!("removexattr {name}");
+    xattr::remove(path, kernel_name(name)).map_err(|e| xattr_error(&what, path, e))
 }
 
 /// `com.apple.quarantine` value.  The real format is
@@ -181,7 +83,7 @@ pub fn quarantine_value() -> Vec<u8> {
     format!(
         "0083;{};Safari;{}",
         crate::shared::util::unix_now(),
-        pseudo_uuid()
+        crate::shared::util::uuid_v4()
     )
     .into_bytes()
 }

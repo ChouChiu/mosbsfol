@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::format::{DsData, DsRecord, DsStore};
-use crate::shared::bplist::Plist;
+use crate::shared::bplist::{self, Plist};
 use crate::shared::util::{Error, Result};
 
 /// Seconds between the 1904 Mac epoch and the 1970 Unix epoch.
@@ -104,44 +104,47 @@ fn icon_location_blob(x: u32, y: u32) -> Vec<u8> {
     b
 }
 
+fn dict(entries: impl IntoIterator<Item = (&'static str, Plist)>) -> Plist {
+    Plist::Dictionary(
+        entries
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+    )
+}
+
 fn window_plist(opts: &FinderOptions) -> Plist {
-    Plist::Dict(vec![
-        (
-            "WindowBounds".to_string(),
-            Plist::String(opts.window_bounds.clone()),
-        ),
-        ("SidebarWidth".to_string(), Plist::Real(180.0)),
-        ("ShowSidebar".to_string(), Plist::Bool(true)),
-        ("ShowToolbar".to_string(), Plist::Bool(false)),
-        ("ShowStatusBar".to_string(), Plist::Bool(true)),
-        ("ShowPathbar".to_string(), Plist::Bool(false)),
-        (
-            "ViewStyle".to_string(),
-            Plist::String(opts.view_style.clone()),
-        ),
+    dict([
+        ("WindowBounds", Plist::String(opts.window_bounds.clone())),
+        ("SidebarWidth", Plist::Real(180.0)),
+        ("ShowSidebar", Plist::Boolean(true)),
+        ("ShowToolbar", Plist::Boolean(false)),
+        ("ShowStatusBar", Plist::Boolean(true)),
+        ("ShowPathbar", Plist::Boolean(false)),
+        ("ViewStyle", Plist::String(opts.view_style.clone())),
     ])
 }
 
 fn icon_view_plist(opts: &FinderOptions) -> Plist {
-    Plist::Dict(vec![
-        ("viewOptionsVersion".to_string(), Plist::Int(1)),
-        ("iconSize".to_string(), Plist::Int(opts.icon_size as i64)),
-        ("textSize".to_string(), Plist::Int(opts.text_size as i64)),
-        ("arrangeBy".to_string(), Plist::String("none".to_string())),
-        ("showIconPreview".to_string(), Plist::Bool(true)),
-        ("showItemInfo".to_string(), Plist::Bool(false)),
-        ("labelOnBottom".to_string(), Plist::Bool(true)),
+    dict([
+        ("viewOptionsVersion", Plist::Integer(1.into())),
+        ("iconSize", Plist::Integer((opts.icon_size as i64).into())),
+        ("textSize", Plist::Integer((opts.text_size as i64).into())),
+        ("arrangeBy", Plist::String("none".to_string())),
+        ("showIconPreview", Plist::Boolean(true)),
+        ("showItemInfo", Plist::Boolean(false)),
+        ("labelOnBottom", Plist::Boolean(true)),
         (
-            "gridSpacing".to_string(),
-            Plist::Int(opts.grid_spacing as i64),
+            "gridSpacing",
+            Plist::Integer((opts.grid_spacing as i64).into()),
         ),
-        ("scrollPositionX".to_string(), Plist::Int(0)),
-        ("scrollPositionY".to_string(), Plist::Int(0)),
-        ("gridOffsetX".to_string(), Plist::Int(0)),
-        ("gridOffsetY".to_string(), Plist::Int(0)),
-        ("backgroundColorRed".to_string(), Plist::Real(1.0)),
-        ("backgroundColorGreen".to_string(), Plist::Real(1.0)),
-        ("backgroundColorBlue".to_string(), Plist::Real(1.0)),
+        ("scrollPositionX", Plist::Integer(0.into())),
+        ("scrollPositionY", Plist::Integer(0.into())),
+        ("gridOffsetX", Plist::Integer(0.into())),
+        ("gridOffsetY", Plist::Integer(0.into())),
+        ("backgroundColorRed", Plist::Real(1.0)),
+        ("backgroundColorGreen", Plist::Real(1.0)),
+        ("backgroundColorBlue", Plist::Real(1.0)),
     ])
 }
 
@@ -188,12 +191,12 @@ pub fn make_records(path: &Path, opts: &FinderOptions, skip_hidden: bool) -> Res
         DsRecord::new(
             ".",
             "icvp",
-            DsData::Blob(crate::shared::bplist::encode(&icon_view_plist(opts))?),
+            DsData::Blob(bplist::encode(&icon_view_plist(opts))?),
         )?,
         DsRecord::new(
             ".",
             "bwsp",
-            DsData::Blob(crate::shared::bplist::encode(&window_plist(opts))?),
+            DsData::Blob(bplist::encode(&window_plist(opts))?),
         )?,
         DsRecord::new(".", "fwi0", DsData::Blob(fwi0_blob()))?,
         DsRecord::new(".", "fwsw", DsData::Long(180))?,

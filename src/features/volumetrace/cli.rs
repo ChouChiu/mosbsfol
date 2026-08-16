@@ -4,23 +4,46 @@
 
 use std::path::PathBuf;
 
+use clap::{ArgMatches, Command};
+
 use super as volumetrace;
-use crate::shared::cli::{first_positional, has_flag};
-use crate::shared::util::{Error, Result};
+use crate::shared::cli::{dry_run_flag, path_arg};
+use crate::shared::util::Result;
 
-pub const HELP: &str = r#"
-    volume trace  trace poop [PATH] [--dry-run]
-                  trace clean [PATH] [--dry-run]"#;
+pub fn command() -> Command {
+    Command::new("trace")
+        .about("Create or remove macOS volume-root droppings")
+        .alias("volumetrace")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(
+            Command::new("poop")
+                .about("Create .Spotlight-V100, .fseventsd, .Trashes, etc.")
+                .alias("make")
+                .arg(path_arg())
+                .arg(dry_run_flag()),
+        )
+        .subcommand(
+            Command::new("clean")
+                .about("Remove macOS volume-root droppings")
+                .arg(path_arg())
+                .arg(dry_run_flag()),
+        )
+}
 
-pub fn run(args: &[String]) -> Result<()> {
-    if args.is_empty() {
-        return Err(Error::new(
+pub fn execute(matches: &ArgMatches) -> Result<()> {
+    let Some((subcommand, matches)) = matches.subcommand() else {
+        return Err(crate::shared::util::Error::new(
             "usage: mosbsfol trace <poop|clean> [PATH] [--dry-run]",
         ));
-    }
-    let path = PathBuf::from(first_positional(&args[1..], true).unwrap_or_else(|| ".".into()));
-    let dry_run = has_flag(&args[1..], &["--dry-run"]);
-    match args[0].as_str() {
+    };
+    let path = matches
+        .get_one::<PathBuf>("path")
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dry_run = matches.get_flag("dry_run");
+
+    match subcommand {
         "poop" | "make" => {
             for p in volumetrace::poop_volume(&path, dry_run)? {
                 println!("💩 created {}", p.display());
@@ -33,7 +56,7 @@ pub fn run(args: &[String]) -> Result<()> {
             }
             Ok(())
         }
-        other => Err(Error::new(format!(
+        other => Err(crate::shared::util::Error::new(format!(
             "unknown trace subcommand {other:?} (poop|clean)"
         ))),
     }

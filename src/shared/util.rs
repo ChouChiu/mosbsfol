@@ -5,27 +5,20 @@
 use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A tiny error type that keeps `main.rs` readable.
-#[derive(Debug)]
-pub struct Error(pub String);
+/// Library error type.  Dynamic messages are the common case for this
+/// small tool; `?` on `std::io::Error` gets the usual transparent display.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("{0}")]
+    Message(String),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
 
 impl Error {
     pub fn new(msg: impl Into<String>) -> Self {
-        Self(msg.into())
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Error {}
-
-impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Self {
-        Self(e.to_string())
+        Self::Message(msg.into())
     }
 }
 
@@ -53,6 +46,12 @@ pub fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// Random UUID v4 for quarantine entries, `.fseventsd`, and Spotlight stores.
+#[cfg(any(feature = "xattr", feature = "volumetrace"))]
+pub fn uuid_v4() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 /// Convert a 4CC stored in a big-endian u32 to its ASCII name.

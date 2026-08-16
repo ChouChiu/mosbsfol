@@ -1,40 +1,43 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Small argument helpers shared by the CLI commands in each feature.
+//! Small [`clap`] argument builders shared by the feature commands.
 
-use crate::shared::util::{Error, Result};
+use std::path::PathBuf;
 
+use clap::{value_parser, Arg, ArgAction};
+
+/// Optional `PATH` argument defaulting to the current directory at the
+/// application level.
 #[allow(dead_code)]
-pub(crate) fn need(args: &[String], i: usize, what: &str) -> Result<String> {
-    args.get(i)
-        .map(|s| s.to_string())
-        .ok_or_else(|| Error::new(format!("missing {what}")))
+pub(crate) fn path_arg() -> Arg {
+    Arg::new("path")
+        .value_parser(value_parser!(PathBuf))
+        .required(false)
+        .value_name("PATH")
+        .help("Target path (defaults to the current directory)")
 }
 
 #[allow(dead_code)]
-pub(crate) fn has_flag(args: &[String], names: &[&str]) -> bool {
-    args.iter().any(|a| names.contains(&a.as_str()))
+pub(crate) fn recursive_flag() -> Arg {
+    Arg::new("recursive")
+        .short('r')
+        .long("recursive")
+        .action(ArgAction::SetTrue)
+        .help("Recurse into subdirectories")
 }
 
 #[allow(dead_code)]
-pub(crate) fn first_positional(args: &[String], skip_flags: bool) -> Option<String> {
-    for a in args {
-        if a.starts_with("--") {
-            continue;
-        }
-        if skip_flags && a.starts_with('-') && a.len() > 1 {
-            continue;
-        }
-        return Some(a.to_string());
-    }
-    None
+pub(crate) fn dry_run_flag() -> Arg {
+    Arg::new("dry_run")
+        .long("dry-run")
+        .action(ArgAction::SetTrue)
+        .help("Print what would be done without writing anything")
 }
 
 #[allow(dead_code)]
-pub(crate) fn positionals_after(args: &[String], skip: usize) -> Vec<String> {
-    args.iter()
-        .skip(skip)
-        .filter(|a| !a.starts_with("--"))
-        .cloned()
-        .collect()
+pub(crate) fn flag(id: &'static str, long: &'static str, help: &'static str) -> Arg {
+    Arg::new(id)
+        .long(long)
+        .action(ArgAction::SetTrue)
+        .help(help)
 }

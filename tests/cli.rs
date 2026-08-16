@@ -18,6 +18,23 @@ fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_mosbsfol"))
 }
 
+#[test]
+fn clap_help_and_version_work() {
+    let out = bin().arg("--help").output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Usage: mosbsfol"));
+    assert!(text.contains("--version"));
+
+    let out = bin().arg("--version").output().unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("mosbsfol "));
+}
+
 fn tmp(name: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!("mosbsfol-cli-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&p);

@@ -12,18 +12,7 @@ pub mod cli;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::shared::util::{unix_now, Error, Result};
-
-fn pseudo_uuid() -> String {
-    format!(
-        "{:08x}-{:04x}-4{:03x}-9{:03x}-{:012x}",
-        unix_now(),
-        (unix_now() & 0xffff) as u16,
-        std::process::id() & 0xfff,
-        (unix_now() & 0xfff) as u16,
-        unix_now()
-    )
-}
+use crate::shared::util::{uuid_v4, Error, Result};
 
 /// Header-only placeholder ICNS.  Real custom-icon art is not generated.
 pub fn minimal_icns() -> Vec<u8> {
@@ -58,20 +47,19 @@ pub fn poop_volume(root: &Path, dry_run: bool) -> Result<Vec<PathBuf>> {
 
     let spotlight = root.join(".Spotlight-V100");
     make_dir(&spotlight, dry_run, &mut out)?;
-    let store = spotlight.join("Store-V2").join(pseudo_uuid());
+    let store = spotlight.join("Store-V2").join(uuid_v4());
     make_dir(&store, dry_run, &mut out)?;
 
     let fsevents = root.join(".fseventsd");
     make_dir(&fsevents, dry_run, &mut out)?;
     let uuid_file = fsevents.join("fseventsd-uuid");
-    let mut data = pseudo_uuid().into_bytes();
+    let mut data = uuid_v4().into_bytes();
     data.push(b'\n');
     make_file(&uuid_file, &data, dry_run, &mut out)?;
 
     let trashes = root.join(".Trashes");
     make_dir(&trashes, dry_run, &mut out)?;
-    let uid = unsafe { libc_getuid() };
-    make_dir(&trashes.join(uid.to_string()), dry_run, &mut out)?;
+    make_dir(&trashes.join(current_uid().to_string()), dry_run, &mut out)?;
 
     make_dir(&root.join(".TemporaryItems"), dry_run, &mut out)?;
     make_file(&root.join(".localized"), &[], dry_run, &mut out)?;
@@ -106,7 +94,7 @@ pub fn clean_volume(root: &Path, dry_run: bool) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     // Deepest paths first for tidy dry-run output; remove_dir_all handles
     // non-empty directories regardless of order.
-    let nested_spotlight = root.join(".Spotlight-V100/Store-V2").join(pseudo_uuid());
+    let nested_spotlight = root.join(".Spotlight-V100/Store-V2").join(uuid_v4());
     let _ = nested_spotlight; // UUID changes every run, so clean the parents.
 
     for dir in [
@@ -128,15 +116,13 @@ pub fn clean_volume(root: &Path, dry_run: bool) -> Result<Vec<PathBuf>> {
 }
 
 #[cfg(unix)]
-unsafe fn libc_getuid() -> u32 {
-    extern "C" {
-        fn getuid() -> u32;
-    }
-    getuid()
+fn current_uid() -> u32 {
+    // SAFETY: `getuid` has no preconditions and is always available on Unix.
+    unsafe { libc::getuid() }
 }
 
 #[cfg(not(unix))]
-fn libc_getuid() -> u32 {
+fn current_uid() -> u32 {
     501
 }
 

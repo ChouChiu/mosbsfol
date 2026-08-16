@@ -2,8 +2,10 @@
 
 //! MOSBSFOL - macOS Bull Shit Feature On Linux.
 //!
-//! Feature-Driven, dependency-free Rust implementation of six thoroughly
-//! non-essential macOS behaviours:
+//! Feature-Driven Rust implementation of six thoroughly non-essential
+//! macOS behaviours.  Common file formats and OS APIs are delegated to
+//! maintained crates (`clap`, `plist`, `zip`, `xattr`, `base64`, `uuid`, `libc`, `thiserror`, `anyhow`) so the
+//! repository itself focuses on the macOS-specific logic:
 //!
 //! * feature `dsstore`: valid binary `.DS_Store` files
 //! * feature `appledouble`: AppleDouble `._*` USB sidecars

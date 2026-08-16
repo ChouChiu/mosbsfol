@@ -94,7 +94,7 @@ pub fn build_maczip(root: &Path) -> Result<(Vec<ZipEntry>, Vec<String>)> {
 
 pub fn write_maczip(root: &Path, output: &Path) -> Result<Vec<String>> {
     let (entries, names) = build_maczip(root)?;
-    fs::write(output, write_zip(&entries))?;
+    fs::write(output, write_zip(&entries)?)?;
     Ok(names)
 }
 
