@@ -367,8 +367,8 @@ pub fn poop_with_style(path: &Path, style: PoopStyle, dry_run: bool) -> Result<P
 
     match style {
         PoopStyle::Removable => {
-            let sidecars = appledouble::poop_tree(path, true, true, true, dry_run)?;
-            let stores = finder::poop_tree(path, &FinderOptions::default(), true, false, dry_run)?;
+            let sidecars = appledouble::poop_tree_skipping_hidden(path, true, true, true, dry_run)?;
+            let stores = finder::poop_tree(path, &FinderOptions::default(), true, true, dry_run)?;
             let volume_traces = poop_volume_if_needed(path, dry_run)?;
 
             Ok(PoopStats {
@@ -844,6 +844,26 @@ mod tests {
         assert!(dir.join(".DS_Store").is_file());
         assert!(dir.join("._hello.txt").is_file());
         assert!(stats.total() >= 2);
+
+        // A second automatic pass must be idempotent: no new Spotlight
+        // UUIDs and no sidecars / .DS_Store files inside the droppings the
+        // first pass created.
+        let second = poop_path(&dir, false).unwrap();
+        assert_eq!(second.sidecars, 1);
+        assert_eq!(second.stores, 1);
+        assert!(!dir.join("._Icon\r").exists());
+        assert!(!dir.join(".Spotlight-V100/.DS_Store").exists());
+        assert!(!dir.join(".Spotlight-V100/._Store-V2").exists());
+        #[cfg(feature = "volumetrace")]
+        {
+            assert_eq!(second.volume_traces, 0);
+            assert_eq!(
+                fs::read_dir(dir.join(".Spotlight-V100/Store-V2"))
+                    .unwrap()
+                    .count(),
+                1
+            );
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }
