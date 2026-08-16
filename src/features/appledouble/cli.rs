@@ -3,13 +3,11 @@
 //! `usb` command: composes the `appledouble` and `dsstore` features, so
 //! this module is compiled only when both are enabled.
 
-use std::path::PathBuf;
-
 use clap::{ArgMatches, Command};
 
 use super as appledouble;
 use crate::features::dsstore::finder::{self, FinderOptions};
-use crate::shared::cli::{dry_run_flag, flag, path_arg, recursive_flag};
+use crate::shared::cli::{dry_run_flag, flag, optional_path, path_arg, recursive_flag};
 use crate::shared::util::Result;
 
 pub fn command() -> Command {
@@ -36,22 +34,19 @@ pub fn command() -> Command {
 }
 
 pub fn execute(matches: &ArgMatches) -> Result<()> {
-    let path = matches
-        .get_one::<PathBuf>("path")
-        .cloned()
-        .unwrap_or_else(|| PathBuf::from("."));
+    let path = optional_path(matches);
     let recursive = matches.get_flag("recursive");
     let dry_run = matches.get_flag("dry_run");
 
     if matches.get_flag("clean") {
         let sidecars = appledouble::clean_tree(&path, recursive, dry_run)?;
         let stores = finder::clean_tree(&path, recursive, dry_run)?;
-        for f in sidecars.into_iter().chain(stores) {
-            println!("removed {}", f.display());
+        for path in sidecars.into_iter().chain(stores) {
+            println!("removed {}", path.display());
         }
         #[cfg(feature = "volumetrace")]
-        for f in crate::features::volumetrace::clean_volume(&path, dry_run)? {
-            println!("removed {}", f.display());
+        for path in crate::features::volumetrace::clean_volume(&path, dry_run)? {
+            println!("removed {}", path.display());
         }
         return Ok(());
     }
@@ -60,17 +55,16 @@ pub fn execute(matches: &ArgMatches) -> Result<()> {
     let type_codes = matches.get_flag("type_codes");
 
     let sidecars = appledouble::poop_tree(&path, recursive, include_dirs, type_codes, dry_run)?;
-    let opts = FinderOptions::default();
-    let stores = finder::poop_tree(&path, &opts, recursive, false, dry_run)?;
-    for f in sidecars {
-        println!("💩 sidecar {}", f.display());
+    let stores = finder::poop_tree(&path, &FinderOptions::default(), recursive, false, dry_run)?;
+    for path in sidecars {
+        println!("💩 sidecar {}", path.display());
     }
-    for f in stores {
-        println!("💩 .DS_Store {}", f.display());
+    for path in stores {
+        println!("💩 .DS_Store {}", path.display());
     }
     #[cfg(feature = "volumetrace")]
-    for f in crate::features::volumetrace::poop_volume(&path, dry_run)? {
-        println!("💩 volume trace {}", f.display());
+    for path in crate::features::volumetrace::poop_volume(&path, dry_run)? {
+        println!("💩 volume trace {}", path.display());
     }
     println!("🪰 USB stick now smells like a Mac.");
     Ok(())

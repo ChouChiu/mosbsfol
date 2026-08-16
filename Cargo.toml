@@ -10,24 +10,29 @@ homepage = "https://github.com/ChouChiu/mosbsfol"
 documentation = "https://docs.rs/mosbsfol"
 
 # Feature-driven build: every macOS behaviour can be compiled in/out.
+# Optional dependencies are declared with `dep:<crate>` so that a build
+# with no features enabled only needs clap.
 [features]
 default = ["dsstore", "appledouble", "maczip", "plist", "xattr", "volumetrace"]
-dsstore = []
+dsstore = ["dep:plist"]
 appledouble = []
 maczip = ["appledouble", "dep:zip"]
-plist = ["dep:base64"]
-xattr = ["dep:xattr", "dep:uuid"]
-volumetrace = ["dep:libc", "dep:uuid"]
+plist = ["dep:base64", "dep:plist"]
+xattr = ["dep:xattr", "dep:uuid", "dep:plist"]
+volumetrace = ["dep:uuid"]
 
 # Mature, maintained crates are used for standard file formats and OS APIs
 # so this project can focus on the macOS-specific behaviour itself.
 [dependencies]
-anyhow = "1"
 base64 = { version = "0.22", optional = true }
-clap = "4"
-libc = { version = "0.2", optional = true }
-plist = { version = "1.10", default-features = false }
-thiserror = "2"
+clap = { version = "4", default-features = false, features = [
+    "error-context",
+    "help",
+    "std",
+    "suggestions",
+    "usage",
+] }
+plist = { version = "1.10", default-features = false, optional = true }
 uuid = { version = "1", default-features = false, features = ["v4"], optional = true }
 xattr = { version = "1.6", optional = true }
 zip = { version = "4.6", default-features = false, features = [
@@ -41,3 +46,7 @@ path = "src/main.rs"
 [profile.release]
 strip = true
 lto = true
+codegen-units = 1
+
+[lints.rust]
+unsafe_code = "forbid"

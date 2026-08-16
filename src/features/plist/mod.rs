@@ -15,7 +15,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 
 use crate::shared::bplist::{self, Dictionary, Plist};
-use crate::shared::util::{Error, Result};
+use crate::shared::util::{decode_hex, Error, Result};
 
 fn plist_error(e: plist::Error) -> Error {
     Error::new(format!("invalid plist: {e}"))
@@ -28,8 +28,7 @@ pub fn parse_auto(data: &[u8]) -> Result<Plist> {
 
 /// Read a plist file in either representation.
 pub fn read_file(path: &Path) -> Result<Plist> {
-    let data = fs::read(path)?;
-    parse_auto(&data)
+    parse_auto(&fs::read(path)?)
 }
 
 /// Write a plist file.  Binary by default; XML with `binary == false`.
@@ -53,6 +52,7 @@ pub fn value_from_arg(raw: &str) -> Result<(String, Plist)> {
     if key.is_empty() {
         return Err(Error::new("empty plist key"));
     }
+
     let value = if value.eq_ignore_ascii_case("true") {
         Plist::Boolean(true)
     } else if value.eq_ignore_ascii_case("false") {
@@ -61,9 +61,9 @@ pub fn value_from_arg(raw: &str) -> Result<(String, Plist)> {
         .strip_prefix("0x")
         .or_else(|| value.strip_prefix("0X"))
     {
-        let n = i64::from_str_radix(hex, 16)
+        let number = u64::from_str_radix(hex, 16)
             .map_err(|_| Error::new(format!("invalid hex integer {value:?}")))?;
-        Plist::Integer(n.into())
+        Plist::Integer(number.into())
     } else if let Some(b64) = value.strip_prefix("@base64:") {
         Plist::Data(
             STANDARD
@@ -71,13 +71,20 @@ pub fn value_from_arg(raw: &str) -> Result<(String, Plist)> {
                 .map_err(|_| Error::new(format!("invalid base64 payload in {value:?}")))?,
         )
     } else if let Some(hex) = value.strip_prefix("@hex:") {
-        Plist::Data(decode_hex(hex)?)
-    } else if let Ok(i) = value.parse::<i64>() {
-        Plist::Integer(i.into())
-    } else if let Ok(f) = value.parse::<f64>() {
+        Plist::Data(decode_hex(hex, "hex payload")?)
+    } else if let Ok(integer) = value.parse::<i64>() {
+        Plist::Integer(integer.into())
+    } else if let Ok(real) = value.parse::<f64>() {
+        if !real.is_finite() {
+            return Err(Error::new(format!(
+                "plist real value must be finite, got {value:?}"
+            )));
+        }
         if value.contains('.') || value.contains('e') || value.contains('E') {
-            Plist::Real(f)
+            Plist::Real(real)
         } else {
+            // Numeric but out of i64 range: keep the user's spelling as a
+            // string rather than silently changing its value.
             Plist::String(value.to_string())
         }
     } else {
@@ -86,29 +93,15 @@ pub fn value_from_arg(raw: &str) -> Result<(String, Plist)> {
     Ok((key.to_string(), value))
 }
 
-fn decode_hex(hex: &str) -> Result<Vec<u8>> {
-    if !hex.len().is_multiple_of(2) {
-        return Err(Error::new("odd-length @hex: data"));
-    }
-    let mut out = Vec::with_capacity(hex.len() / 2);
-    for i in (0..hex.len()).step_by(2) {
-        out.push(
-            u8::from_str_radix(&hex[i..i + 2], 16)
-                .map_err(|_| Error::new(format!("invalid hex byte {}", &hex[i..i + 2])))?,
-        );
-    }
-    Ok(out)
-}
-
 /// Wrap a list of key/value pairs into a dictionary.
 pub fn dict_from_args(args: &[String]) -> Result<Plist> {
     let mut entries = Dictionary::new();
     for arg in args {
-        let (k, v) = value_from_arg(arg)?;
-        if entries.contains_key(&k) {
-            return Err(Error::new(format!("duplicate plist key {k:?}")));
+        let (key, value) = value_from_arg(arg)?;
+        if entries.contains_key(&key) {
+            return Err(Error::new(format!("duplicate plist key {key:?}")));
         }
-        entries.insert(k, v);
+        entries.insert(key, value);
     }
     Ok(Plist::Dictionary(entries))
 }
@@ -122,7 +115,7 @@ mod tests {
             entries
                 .iter()
                 .cloned()
-                .map(|(k, v)| (k.to_string(), v))
+                .map(|(key, value)| (key.to_string(), value))
                 .collect(),
         )
     }
@@ -161,6 +154,10 @@ mod tests {
             ("hex".into(), Plist::Integer(255.into()))
         );
         assert_eq!(
+            value_from_arg("big=0xffffffffffffffff").unwrap(),
+            ("big".into(), Plist::Integer(u64::MAX.into()))
+        );
+        assert_eq!(
             value_from_arg("data=@base64:TQ==").unwrap(),
             ("data".into(), Plist::Data(b"M".to_vec()))
         );
@@ -176,5 +173,21 @@ mod tests {
             value_from_arg("name=mosbsfol").unwrap(),
             ("name".into(), Plist::String("mosbsfol".into()))
         );
+    }
+
+    #[test]
+    fn rejects_bad_values() {
+        assert!(value_from_arg("x").is_err());
+        assert!(value_from_arg("=1").is_err());
+        assert!(value_from_arg("x=0xzz").is_err());
+        assert!(value_from_arg("x=@hex:0").is_err());
+        assert!(value_from_arg("x=nan").is_err());
+        assert!(value_from_arg("x=inf").is_err());
+    }
+
+    #[test]
+    fn duplicate_keys_are_rejected() {
+        let args = ["a=1".to_string(), "a=2".to_string()];
+        assert!(dict_from_args(&args).is_err());
     }
 }

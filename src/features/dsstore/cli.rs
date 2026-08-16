@@ -8,7 +8,7 @@ use clap::{value_parser, Arg, ArgMatches, Command};
 
 use super::finder::{self, FinderOptions};
 use super::format::{display_record, records_sorted_cmp, DsStore};
-use crate::shared::cli::{dry_run_flag, flag, path_arg, recursive_flag};
+use crate::shared::cli::{dry_run_flag, flag, optional_path, path_arg, recursive_flag};
 use crate::shared::util::Result;
 
 pub fn command() -> Command {
@@ -86,13 +86,18 @@ pub fn execute_poop(matches: &ArgMatches) -> Result<()> {
     let recursive = matches.get_flag("recursive");
     let skip_hidden = matches.get_flag("skip_hidden");
     let dry_run = matches.get_flag("dry_run");
-    let opts = FinderOptions::default();
-    let files = finder::poop_tree(&path, &opts, recursive, skip_hidden, dry_run)?;
-    for f in &files {
+    let files = finder::poop_tree(
+        &path,
+        &FinderOptions::default(),
+        recursive,
+        skip_hidden,
+        dry_run,
+    )?;
+    for file in &files {
         if dry_run {
-            println!("would create {}", f.display());
+            println!("would create {}", file.display());
         } else {
-            println!("💩 created {}", f.display());
+            println!("💩 created {}", file.display());
         }
     }
     if files.is_empty() {
@@ -128,18 +133,11 @@ fn execute_clean(matches: &ArgMatches) -> Result<()> {
     let recursive = matches.get_flag("recursive");
     let dry_run = matches.get_flag("dry_run");
     let files = finder::clean_tree(&path, recursive, dry_run)?;
-    for f in &files {
-        println!("removed {}", f.display());
+    for file in &files {
+        println!("removed {}", file.display());
     }
     if files.is_empty() {
         println!("no .DS_Store files found");
     }
     Ok(())
-}
-
-fn optional_path(matches: &ArgMatches) -> PathBuf {
-    matches
-        .get_one::<PathBuf>("path")
-        .cloned()
-        .unwrap_or_else(|| PathBuf::from("."))
 }

@@ -8,8 +8,6 @@
     feature = "volumetrace"
 ))]
 
-//! End-to-end CLI smoke tests.
-
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -75,6 +73,26 @@ fn dsstore_poop_and_inspect() {
     assert!(text.contains("a.txt"));
     assert!(text.contains("sub"));
     assert!(text.contains("bwsp"));
+}
+
+#[cfg(feature = "dsstore")]
+#[test]
+fn dsstore_skip_hidden_does_not_touch_hidden_subtrees() {
+    let dir = tmp("dsstore-hidden");
+    fs::write(dir.join("a.txt"), b"a").unwrap();
+    fs::create_dir_all(dir.join(".hidden/sub")).unwrap();
+
+    let out = bin()
+        .args(["poop", dir.to_str().unwrap(), "-r", "--skip-hidden"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(dir.join(".DS_Store").is_file());
+    assert!(!dir.join(".hidden/.DS_Store").exists());
 }
 
 #[cfg(all(feature = "appledouble", feature = "dsstore"))]

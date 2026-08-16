@@ -4,8 +4,7 @@
 //!
 //! Feature-Driven Rust implementation of six thoroughly non-essential
 //! macOS behaviours.  Common file formats and OS APIs are delegated to
-//! maintained crates (`clap`, `plist`, `zip`, `xattr`, `base64`, `uuid`, `libc`, `thiserror`, `anyhow`) so the
-//! repository itself focuses on the macOS-specific logic:
+//! maintained crates (`clap`, `plist`, `zip`, `xattr`, `base64`, `uuid`) so the repository itself focuses on the macOS-specific logic:
 //!
 //! * feature `dsstore`: valid binary `.DS_Store` files
 //! * feature `appledouble`: AppleDouble `._*` USB sidecars
@@ -30,7 +29,10 @@ pub mod core;
 pub mod features;
 pub mod shared;
 
-pub use shared::{bplist, mac, util};
+pub use shared::{mac, util};
+
+#[cfg(any(feature = "dsstore", feature = "plist", feature = "xattr"))]
+pub use shared::bplist;
 
 #[cfg(feature = "appledouble")]
 pub use features::appledouble;

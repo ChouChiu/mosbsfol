@@ -15,6 +15,7 @@ pub mod cli;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::shared::fs::{self as fsx, file_name};
 use crate::shared::util::{Error, Result};
 
 pub use crate::shared::mac::make_finder_info;
@@ -25,14 +26,21 @@ pub const APPLEDOUBLE_VERSION: [u8; 4] = [0x00, 0x02, 0x00, 0x00];
 pub const ENTRY_RESOURCE_FORK: u32 = 2;
 pub const ENTRY_FINDER_INFO: u32 = 9;
 
+const FIXED_HEADER_LEN: usize = 26;
+const ENTRY_LEN: usize = 12;
+const FINDER_INFO_LEN: usize = 32;
+
 /// Serialise an AppleDouble file containing Finder info and an optional
 /// resource fork.
-pub fn encode(finder_info: &[u8; 32], resource_fork: &[u8]) -> Vec<u8> {
-    let entry_count = if resource_fork.is_empty() { 1u16 } else { 2u16 };
-    let header_len = 26 + 12 * entry_count as usize;
-    let finder_off = (header_len + 3) & !3; // 4-byte aligned
-    let resource_off = finder_off + 32;
-    let total = resource_off + resource_fork.len();
+pub fn encode(finder_info: &[u8; 32], resource_fork: &[u8]) -> Result<Vec<u8>> {
+    debug_assert_eq!(finder_info.len(), FINDER_INFO_LEN);
+    let entry_count = u16::from(!resource_fork.is_empty()) + 1;
+    let header_len = FIXED_HEADER_LEN + ENTRY_LEN * entry_count as usize;
+    let finder_offset = (header_len + 3) & !3; // 4-byte aligned
+    let resource_offset = finder_offset + FINDER_INFO_LEN;
+    let resource_len = u32::try_from(resource_fork.len())
+        .map_err(|_| Error::new("AppleDouble resource fork larger than 4 GiB"))?;
+    let total = resource_offset + resource_fork.len();
 
     let mut out = Vec::with_capacity(total);
     out.extend_from_slice(&APPLEDOUBLE_MAGIC);
@@ -41,19 +49,19 @@ pub fn encode(finder_info: &[u8; 32], resource_fork: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&entry_count.to_be_bytes());
 
     out.extend_from_slice(&ENTRY_FINDER_INFO.to_be_bytes());
-    out.extend_from_slice(&(finder_off as u32).to_be_bytes());
-    out.extend_from_slice(&32u32.to_be_bytes());
+    out.extend_from_slice(&(finder_offset as u32).to_be_bytes());
+    out.extend_from_slice(&(FINDER_INFO_LEN as u32).to_be_bytes());
 
     if !resource_fork.is_empty() {
         out.extend_from_slice(&ENTRY_RESOURCE_FORK.to_be_bytes());
-        out.extend_from_slice(&(resource_off as u32).to_be_bytes());
-        out.extend_from_slice(&(resource_fork.len() as u32).to_be_bytes());
+        out.extend_from_slice(&(resource_offset as u32).to_be_bytes());
+        out.extend_from_slice(&resource_len.to_be_bytes());
     }
 
-    out.resize(finder_off, 0);
+    out.resize(finder_offset, 0);
     out.extend_from_slice(finder_info);
     out.extend_from_slice(resource_fork);
-    out
+    Ok(out)
 }
 
 #[derive(Debug)]
@@ -65,7 +73,7 @@ pub struct ParsedAppleDouble {
 
 /// Parse an AppleDouble header and payloads.
 pub fn parse(data: &[u8]) -> Result<ParsedAppleDouble> {
-    if data.len() < 26 || data[0..4] != APPLEDOUBLE_MAGIC {
+    if data.len() < FIXED_HEADER_LEN || data[0..4] != APPLEDOUBLE_MAGIC {
         return Err(Error::new("not an AppleDouble file (bad magic)"));
     }
     if data[4..8] != APPLEDOUBLE_VERSION {
@@ -74,28 +82,40 @@ pub fn parse(data: &[u8]) -> Result<ParsedAppleDouble> {
             &data[4..8]
         )));
     }
+
     let count = u16::from_be_bytes(data[24..26].try_into().unwrap()) as usize;
-    let mut pos = 26usize;
+    let table_end = FIXED_HEADER_LEN
+        .checked_add(
+            count
+                .checked_mul(ENTRY_LEN)
+                .ok_or_else(|| Error::new("AppleDouble entry table length overflow"))?,
+        )
+        .ok_or_else(|| Error::new("AppleDouble entry table length overflow"))?;
+    if data.len() < table_end {
+        return Err(Error::new("truncated AppleDouble entry table"));
+    }
+
     let mut entries = Vec::with_capacity(count);
-    for _ in 0..count {
-        if data.len() < pos + 12 {
-            return Err(Error::new("truncated AppleDouble entry table"));
-        }
-        let id = be_u32(data, pos);
-        let off = be_u32(data, pos + 4) as usize;
-        let len = be_u32(data, pos + 8) as usize;
-        entries.push((id, off as u32, len as u32));
-        pos += 12;
+    for index in 0..count {
+        let pos = FIXED_HEADER_LEN + index * ENTRY_LEN;
+        let id = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap());
+        let offset = u32::from_be_bytes(data[pos + 4..pos + 8].try_into().unwrap());
+        let len = u32::from_be_bytes(data[pos + 8..pos + 12].try_into().unwrap());
+        entries.push((id, offset, len));
     }
 
     let mut finder_info = None;
     let mut resource_fork = None;
-    for (id, off, len) in &entries {
+    for (id, offset, len) in &entries {
+        let start = *offset as usize;
+        let end = start
+            .checked_add(*len as usize)
+            .ok_or_else(|| Error::new("AppleDouble entry range overflow"))?;
         let slice = data
-            .get(*off as usize..*off as usize + *len as usize)
+            .get(start..end)
             .ok_or_else(|| Error::new("AppleDouble entry out of file range"))?;
         match *id {
-            ENTRY_FINDER_INFO if slice.len() == 32 => {
+            ENTRY_FINDER_INFO if slice.len() == FINDER_INFO_LEN => {
                 finder_info = Some(slice.try_into().unwrap());
             }
             ENTRY_RESOURCE_FORK => resource_fork = Some(slice.to_vec()),
@@ -109,30 +129,27 @@ pub fn parse(data: &[u8]) -> Result<ParsedAppleDouble> {
     })
 }
 
-fn be_u32(data: &[u8], pos: usize) -> u32 {
-    u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap())
-}
-
 /// One `._file` sidecar path for `target`.
 pub fn sidecar_path(target: &Path) -> PathBuf {
-    let name = target
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let name = file_name(target);
     target.with_file_name(format!("{}{}", "._", name))
 }
 
-/// Raw Resource Fork data attached to `target`, when the `xattr` feature
-/// is compiled in and the filesystem supports it.
-pub fn resource_fork_for(target: &Path) -> Vec<u8> {
+/// Raw Resource Fork data attached to `target`.
+///
+/// With the `xattr` feature this reads `com.apple.ResourceFork`; filesystems
+/// without xattr support yield an empty fork (which is exactly why Apple
+/// invented AppleDouble sidecars).  Without the feature the fork is always
+/// empty.
+pub fn resource_fork_for(target: &Path) -> Result<Vec<u8>> {
     #[cfg(feature = "xattr")]
     {
-        crate::features::xattr::get_resource_fork(target).unwrap_or_default()
+        crate::features::xattr::resource_fork_or_empty(target)
     }
     #[cfg(not(feature = "xattr"))]
     {
         let _ = target;
-        Vec::new()
+        Ok(Vec::new())
     }
 }
 
@@ -142,8 +159,10 @@ pub fn sidecar_bytes_for(
     type_code: &[u8; 4],
     creator_code: &[u8; 4],
 ) -> Result<Vec<u8>> {
-    let info = make_finder_info(type_code, creator_code);
-    Ok(encode(&info, &resource_fork_for(target)))
+    encode(
+        &make_finder_info(type_code, creator_code),
+        &resource_fork_for(target)?,
+    )
 }
 
 /// Create a `._` sidecar for one file or directory.
@@ -169,6 +188,7 @@ pub fn poop_tree(
     use_type_codes: bool,
     dry_run: bool,
 ) -> Result<Vec<PathBuf>> {
+    fsx::require_dir(root)?;
     let mut out = Vec::new();
     poop_tree_inner(
         root,
@@ -189,21 +209,12 @@ fn poop_tree_inner(
     dry_run: bool,
     out: &mut Vec<PathBuf>,
 ) -> Result<()> {
-    let mut children: Vec<PathBuf> = fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .collect();
-    children.sort();
-
-    for child in children {
-        let name = child
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+    for child in fsx::sorted_dir_entries(dir)? {
+        let name = file_name(&child);
         if name.starts_with("._") || name == ".DS_Store" {
             continue;
         }
-        let meta = fs::symlink_metadata(&child)?;
+        let meta = fsx::symlink_metadata(&child)?;
         if meta.file_type().is_symlink() {
             continue;
         }
@@ -233,12 +244,12 @@ fn poop_tree_inner(
             if dry_run {
                 out.push(sidecar_path(&child));
             } else {
-                let t = if use_type_codes {
+                let type_code = if use_type_codes {
                     crate::shared::mac::mac_type_for_name(&name)
                 } else {
                     *b"????"
                 };
-                out.push(create_sidecar(&child, &t, b"MACS")?);
+                out.push(create_sidecar(&child, &type_code, b"MACS")?);
             }
         }
     }
@@ -247,6 +258,7 @@ fn poop_tree_inner(
 
 /// Delete `._*` sidecars recursively.  Returns removed paths.
 pub fn clean_tree(root: &Path, recursive: bool, dry_run: bool) -> Result<Vec<PathBuf>> {
+    fsx::require_dir(root)?;
     let mut removed = Vec::new();
     clean_tree_inner(root, recursive, dry_run, &mut removed)?;
     Ok(removed)
@@ -258,22 +270,17 @@ fn clean_tree_inner(
     dry_run: bool,
     removed: &mut Vec<PathBuf>,
 ) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let path = entry.path();
-        if name.starts_with("._") && path.is_file() {
+    for path in fsx::sorted_dir_entries(dir)? {
+        let name = file_name(&path);
+        if name.starts_with("._") && fsx::exists_no_follow(&path)? {
             if dry_run {
                 removed.push(path);
             } else {
                 fs::remove_file(&path)?;
                 removed.push(path);
             }
-        } else if recursive && path.is_dir() {
-            let meta = fs::symlink_metadata(&path)?;
-            if !meta.file_type().is_symlink() {
-                clean_tree_inner(&path, recursive, dry_run, removed)?;
-            }
+        } else if recursive && !fsx::is_symlink(&path)? && path.is_dir() {
+            clean_tree_inner(&path, recursive, dry_run, removed)?;
         }
     }
     Ok(())
@@ -286,7 +293,7 @@ mod tests {
     #[test]
     fn header_and_roundtrip() {
         let info = make_finder_info(b"TEXT", b"ttxt");
-        let data = encode(&info, &[0, 1, 2]);
+        let data = encode(&info, &[0, 1, 2]).unwrap();
         assert_eq!(data[0..4], APPLEDOUBLE_MAGIC);
         assert_eq!(data[4..8], APPLEDOUBLE_VERSION);
         let parsed = parse(&data).unwrap();
@@ -296,10 +303,22 @@ mod tests {
 
     #[test]
     fn empty_resource_uses_single_entry() {
-        let data = encode(&[0u8; 32], &[]);
+        let info = [0u8; 32];
+        let data = encode(&info, &[]).unwrap();
         assert_eq!(u16::from_be_bytes(data[24..26].try_into().unwrap()), 1);
+        assert_eq!(data.len(), 72); // 26 + 12 header, padded to 40, + 32 info
         let parsed = parse(&data).unwrap();
-        assert!(parsed.finder_info.is_some());
+        assert_eq!(parsed.finder_info, Some(info));
         assert!(parsed.resource_fork.is_none());
+    }
+
+    #[test]
+    fn parser_rejects_truncated_ranges() {
+        let mut data = encode(&[0u8; 32], b"x").unwrap();
+        // Corrupt the resource-fork length to point past EOF.
+        let resource_entry_offset = 26 + 12;
+        data[resource_entry_offset + 8..resource_entry_offset + 12]
+            .copy_from_slice(&0xffff_ff00u32.to_be_bytes());
+        assert!(parse(&data).is_err());
     }
 }

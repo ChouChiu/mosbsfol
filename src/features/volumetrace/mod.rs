@@ -12,7 +12,8 @@ pub mod cli;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::shared::util::{uuid_v4, Error, Result};
+use crate::shared::fs as fsx;
+use crate::shared::util::{uuid_v4, Result};
 
 /// Header-only placeholder ICNS.  Real custom-icon art is not generated.
 pub fn minimal_icns() -> Vec<u8> {
@@ -40,9 +41,7 @@ fn make_file(path: &Path, data: &[u8], dry_run: bool, out: &mut Vec<PathBuf>) ->
 
 /// Drop macOS volume traces into `root` (normally a mounted volume root).
 pub fn poop_volume(root: &Path, dry_run: bool) -> Result<Vec<PathBuf>> {
-    if !root.is_dir() {
-        return Err(Error::new(format!("{} is not a directory", root.display())));
-    }
+    fsx::require_dir(root)?;
     let mut out = Vec::new();
 
     let spotlight = root.join(".Spotlight-V100");
@@ -76,26 +75,28 @@ pub fn poop_volume(root: &Path, dry_run: bool) -> Result<Vec<PathBuf>> {
 }
 
 fn remove_path(path: &Path, dry_run: bool, out: &mut Vec<PathBuf>) -> Result<()> {
-    out.push(path.to_path_buf());
-    if dry_run {
-        return Ok(());
-    }
     match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_dir() => fs::remove_dir_all(path)?,
-        Ok(_) => fs::remove_file(path)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.into()),
+        Ok(meta) => {
+            out.push(path.to_path_buf());
+            if dry_run {
+                return Ok(());
+            }
+            if meta.file_type().is_dir() {
+                fs::remove_dir_all(path)?;
+            } else {
+                fs::remove_file(path)?;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     Ok(())
 }
 
 /// Remove the markers previously created by [`poop_volume`].
 pub fn clean_volume(root: &Path, dry_run: bool) -> Result<Vec<PathBuf>> {
+    fsx::require_dir(root)?;
     let mut out = Vec::new();
-    // Deepest paths first for tidy dry-run output; remove_dir_all handles
-    // non-empty directories regardless of order.
-    let nested_spotlight = root.join(".Spotlight-V100/Store-V2").join(uuid_v4());
-    let _ = nested_spotlight; // UUID changes every run, so clean the parents.
 
     for dir in [
         root.join(".Spotlight-V100"),
@@ -115,15 +116,22 @@ pub fn clean_volume(root: &Path, dry_run: bool) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-#[cfg(unix)]
+/// Current process UID without pulling in `libc` just for `getuid`.
+///
+/// Linux exposes the effective UID in `/proc/self/status`; fall back to
+/// Apple's conventional first-user UID when that interface is unavailable
+/// (for example in a minimal container).
 fn current_uid() -> u32 {
-    // SAFETY: `getuid` has no preconditions and is always available on Unix.
-    unsafe { libc::getuid() }
-}
-
-#[cfg(not(unix))]
-fn current_uid() -> u32 {
-    501
+    fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status.lines().find_map(|line| {
+                line.strip_prefix("Uid:")
+                    .and_then(|value| value.split_whitespace().next())
+                    .and_then(|uid| uid.parse::<u32>().ok())
+            })
+        })
+        .unwrap_or(501)
 }
 
 #[cfg(test)]
@@ -152,7 +160,19 @@ mod tests {
         assert!(tmp.join("Icon\r").is_file());
         assert!(!created.is_empty());
         let removed = clean_volume(&tmp, false).unwrap();
+        assert_eq!(removed.len(), 7); // parent markers only; nested paths are implied
         assert!(!removed.is_empty());
+        assert!(clean_volume(&tmp, false).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn dry_run_does_not_report_missing_paths() {
+        let tmp =
+            std::env::temp_dir().join(format!("mosbsfol-voltrace-dry-{}", std::process::id()));
+        fs::create_dir_all(&tmp).unwrap();
+        let removed = clean_volume(&tmp, true).unwrap();
+        assert!(removed.is_empty());
         let _ = fs::remove_dir_all(&tmp);
     }
 }

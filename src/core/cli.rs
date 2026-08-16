@@ -6,51 +6,35 @@
 //! `src/features/<feature>/cli.rs`.  This module only composes the
 //! feature-gated root command and dispatches parsed matches.
 
-use anyhow::{anyhow, Result};
+use std::ffi::{OsStr, OsString};
+
 use clap::error::ErrorKind;
 use clap::Command;
 
+use crate::shared::util::{Error, Result};
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[allow(unused_variables)]
-pub fn run(args: &[String]) -> Result<()> {
+pub fn run(args: &[OsString]) -> Result<()> {
     // Preserve the two pre-clap conveniences that are not flag-shaped.
-    if args.first().is_some_and(|a| a == "help") {
+    if args.first().is_some_and(|arg| arg == OsStr::new("help")) {
         root_command().print_help()?;
         return Ok(());
     }
-    if args.first().is_some_and(|a| a == "version") {
+    if args.first().is_some_and(|arg| arg == OsStr::new("version")) {
         println!("mosbsfol {VERSION}");
         return Ok(());
     }
 
     // clap expects argv[0] to be the binary name; `args` contains argv[1..].
-    let argv = std::iter::once("mosbsfol").chain(args.iter().map(String::as_str));
+    let argv = std::iter::once(OsString::from("mosbsfol")).chain(args.iter().cloned());
     match root_command().try_get_matches_from(argv) {
         Ok(matches) => {
             let Some((name, sub_matches)) = matches.subcommand() else {
                 root_command().print_help()?;
                 return Ok(());
             };
-            match name {
-                #[cfg(feature = "dsstore")]
-                "dsstore" => Ok(crate::features::dsstore::cli::execute(sub_matches)?),
-                #[cfg(feature = "dsstore")]
-                "poop" => Ok(crate::features::dsstore::cli::execute_poop(sub_matches)?),
-                #[cfg(all(feature = "appledouble", feature = "dsstore"))]
-                "usb" => Ok(crate::features::appledouble::cli::execute(sub_matches)?),
-                #[cfg(feature = "maczip")]
-                "maczip" | "zip" => Ok(crate::features::maczip::cli::execute(sub_matches)?),
-                #[cfg(feature = "plist")]
-                "plist" => Ok(crate::features::plist::cli::execute(sub_matches)?),
-                #[cfg(feature = "xattr")]
-                "xattr" => Ok(crate::features::xattr::cli::execute(sub_matches)?),
-                #[cfg(feature = "volumetrace")]
-                "trace" | "volumetrace" => {
-                    Ok(crate::features::volumetrace::cli::execute(sub_matches)?)
-                }
-                other => Err(anyhow!("unknown command {other:?}")),
-            }
+            dispatch(name, sub_matches)
         }
         Err(err) => match err.kind() {
             ErrorKind::DisplayHelp
@@ -59,13 +43,34 @@ pub fn run(args: &[String]) -> Result<()> {
                 err.print()?;
                 Ok(())
             }
-            ErrorKind::InvalidSubcommand => Err(anyhow!(
+            ErrorKind::InvalidSubcommand => Err(Error::new(format!(
                 "{}
 Run `mosbsfol --help` for usage.",
                 render_clap_error(&err)
-            )),
-            _ => Err(anyhow!(render_clap_error(&err))),
+            ))),
+            _ => Err(Error::new(render_clap_error(&err))),
         },
+    }
+}
+
+#[allow(unused_variables)]
+fn dispatch(name: &str, matches: &clap::ArgMatches) -> Result<()> {
+    match name {
+        #[cfg(feature = "dsstore")]
+        "dsstore" => crate::features::dsstore::cli::execute(matches),
+        #[cfg(feature = "dsstore")]
+        "poop" => crate::features::dsstore::cli::execute_poop(matches),
+        #[cfg(all(feature = "appledouble", feature = "dsstore"))]
+        "usb" => crate::features::appledouble::cli::execute(matches),
+        #[cfg(feature = "maczip")]
+        "maczip" | "zip" => crate::features::maczip::cli::execute(matches),
+        #[cfg(feature = "plist")]
+        "plist" => crate::features::plist::cli::execute(matches),
+        #[cfg(feature = "xattr")]
+        "xattr" => crate::features::xattr::cli::execute(matches),
+        #[cfg(feature = "volumetrace")]
+        "trace" | "volumetrace" => crate::features::volumetrace::cli::execute(matches),
+        other => Err(Error::new(format!("unknown command {other:?}"))),
     }
 }
 

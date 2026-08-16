@@ -10,6 +10,7 @@ use ::zip::{CompressionMethod, DateTime, ZipWriter};
 
 use crate::shared::util::{Error, Result};
 
+#[derive(Clone, Debug)]
 pub struct ZipEntry {
     pub name: String,
     pub data: Vec<u8>,

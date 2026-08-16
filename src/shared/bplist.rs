@@ -6,6 +6,7 @@
 //! records such as `bwsp`, `icvp` and `lsvp`, and as the value of most
 //! `com.apple.metadata:*` extended attributes.
 
+use std::fmt::Write as _;
 use std::io::Cursor;
 
 use crate::shared::util::{Error, Result};
@@ -27,7 +28,7 @@ pub fn encode(value: &Plist) -> Result<Vec<u8>> {
 
 /// Decode a `bplist00` byte string.
 pub fn decode(data: &[u8]) -> Result<Plist> {
-    if data.len() < 8 || &data[..8] != BPLIST_MAGIC {
+    if data.len() < 8 || data[..8] != *BPLIST_MAGIC {
         return Err(Error::new("not a binary property list (bplist00)"));
     }
     Plist::from_reader(Cursor::new(data)).map_err(plist_error)
@@ -54,48 +55,65 @@ fn write_json(value: &Plist, out: &mut String) {
         }
         Plist::Dictionary(entries) => {
             out.push('{');
-            for (i, (k, v)) in entries.iter().enumerate() {
+            for (i, (key, item)) in entries.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
-                out.push_str(&json_string(k));
+                write_json_string(key, out);
                 out.push(':');
-                write_json(v, out);
+                write_json(item, out);
             }
             out.push('}');
         }
-        Plist::Boolean(b) => out.push_str(if *b { "true" } else { "false" }),
-        Plist::Data(d) => out.push_str(&format!(
-            "\"<{} bytes: {}>\"",
-            d.len(),
-            crate::shared::util::hex_dump(d, 16)
-        )),
-        Plist::Date(d) => out.push_str(&format!("\"<date {}>\"", d.to_xml_format())),
-        Plist::Integer(i) => out.push_str(&i.to_string()),
-        Plist::Real(r) => out.push_str(&r.to_string()),
-        Plist::String(s) => out.push_str(&json_string(s)),
-        Plist::Uid(u) => out.push_str(&u.get().to_string()),
+        Plist::Boolean(value) => out.push_str(if *value { "true" } else { "false" }),
+        Plist::Data(data) => {
+            out.push('"');
+            let _ = write!(
+                out,
+                "<{} bytes: {}>",
+                data.len(),
+                crate::shared::util::hex_dump(data, 16)
+            );
+            out.push('"');
+        }
+        Plist::Date(date) => {
+            out.push('"');
+            let _ = write!(out, "<date {}>", date.to_xml_format());
+            out.push('"');
+        }
+        Plist::Integer(value) => {
+            let _ = write!(out, "{value}");
+        }
+        Plist::Real(value) if value.is_finite() => {
+            let _ = write!(out, "{value}");
+        }
+        // JSON has no NaN/Infinity literals.
+        Plist::Real(_) => out.push_str("null"),
+        Plist::String(value) => write_json_string(value, out),
+        Plist::Uid(value) => {
+            let _ = write!(out, "{}", value.get());
+        }
         // `plist::Value` is non-exhaustive; future variants display as null.
         _ => out.push_str("null"),
     }
 }
 
-fn json_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
+fn write_json_string(value: &str, out: &mut String) {
     out.push('"');
-    for c in s.chars() {
+    for c in value.chars() {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
             c => out.push(c),
         }
     }
     out.push('"');
-    out
 }
 
 #[cfg(test)]
@@ -107,14 +125,14 @@ mod tests {
             entries
                 .iter()
                 .cloned()
-                .map(|(k, v)| (k.to_string(), v))
+                .map(|(key, value)| (key.to_string(), value))
                 .collect(),
         )
     }
 
     fn roundtrip(value: Plist) {
         let bytes = encode(&value).unwrap();
-        assert_eq!(&bytes[..8], BPLIST_MAGIC);
+        assert_eq!(bytes[..8], *BPLIST_MAGIC);
         let decoded = decode(&bytes).unwrap();
         assert_eq!(decoded, value);
     }
@@ -157,6 +175,23 @@ mod tests {
             .as_dictionary()
             .and_then(|d| d.get("bwsp"))
             .is_some());
+    }
+
+    #[test]
+    fn json_output_is_valid_json_for_all_values() {
+        let value = dict(&[
+            ("nan", Plist::Real(f64::NAN)),
+            ("inf", Plist::Real(f64::INFINITY)),
+            (
+                "text",
+                Plist::String("quote\" slash\\ newline\n tab\t".into()),
+            ),
+        ]);
+        let json = to_json(&value);
+        assert!(json.contains("\"nan\":null"));
+        assert!(json.contains("\"inf\":null"));
+        assert!(json.contains("\\\""));
+        assert!(json.contains("\\n"));
     }
 
     #[test]

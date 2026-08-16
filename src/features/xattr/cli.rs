@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use clap::{value_parser, Arg, ArgAction, ArgMatches, Command};
 
 use super as xattr;
-use crate::shared::util::{Error, Result};
+use crate::shared::cli::required_path;
+use crate::shared::util::{decode_hex, parse_yes_no, Error, Result};
 
 pub fn command() -> Command {
     Command::new("xattr")
@@ -173,20 +174,20 @@ pub fn execute(matches: &ArgMatches) -> Result<()> {
 }
 
 fn execute_list(matches: &ArgMatches) -> Result<()> {
-    let path = file(matches);
+    let path = required_path(matches, "file");
     let names = xattr::list(path)?;
     for name in names {
         let shown = xattr::display_name(&name);
         match xattr::get(path, &name) {
             Ok(raw) => println!("{shown}: {}", xattr::display_value(&shown, &raw)),
-            Err(e) => println!("{shown}: <{e}>"),
+            Err(error) => println!("{shown}: <{error}>"),
         }
     }
     Ok(())
 }
 
 fn execute_get(matches: &ArgMatches) -> Result<()> {
-    let path = file(matches);
+    let path = required_path(matches, "file");
     let name = matches
         .get_one::<String>("name")
         .expect("clap requires NAME");
@@ -196,7 +197,7 @@ fn execute_get(matches: &ArgMatches) -> Result<()> {
 }
 
 fn execute_set(matches: &ArgMatches) -> Result<()> {
-    let path = file(matches);
+    let path = required_path(matches, "file");
     let name = matches
         .get_one::<String>("name")
         .expect("clap requires NAME");
@@ -212,7 +213,7 @@ fn execute_set(matches: &ArgMatches) -> Result<()> {
 }
 
 fn execute_del(matches: &ArgMatches) -> Result<()> {
-    let path = file(matches);
+    let path = required_path(matches, "file");
     let name = matches
         .get_one::<String>("name")
         .expect("clap requires NAME");
@@ -220,7 +221,7 @@ fn execute_del(matches: &ArgMatches) -> Result<()> {
 }
 
 fn execute_quarantine(matches: &ArgMatches) -> Result<()> {
-    let path = file(matches);
+    let path = required_path(matches, "file");
     xattr::set_quarantine(path)?;
     let raw = xattr::get(path, "com.apple.quarantine")?;
     println!("com.apple.quarantine: {}", String::from_utf8_lossy(&raw));
@@ -228,22 +229,22 @@ fn execute_quarantine(matches: &ArgMatches) -> Result<()> {
 }
 
 fn execute_finderinfo(matches: &ArgMatches) -> Result<()> {
-    let path = file(matches);
+    let path = required_path(matches, "file");
     let type_code = matches
         .get_one::<String>("type_code")
-        .map(|s| fourcc_arg(s))
+        .map(|value| fourcc_arg(value))
         .transpose()?
         .unwrap_or(*b"????");
-    let creator = matches
+    let creator_code = matches
         .get_one::<String>("creator_code")
-        .map(|s| fourcc_arg(s))
+        .map(|value| fourcc_arg(value))
         .transpose()?
         .unwrap_or(*b"MACS");
-    xattr::set_finder_info(path, &type_code, &creator)
+    xattr::set_finder_info(path, &type_code, &creator_code)
 }
 
 fn execute_wherefroms(matches: &ArgMatches) -> Result<()> {
-    let path = file(matches);
+    let path = required_path(matches, "file");
     let urls: Vec<String> = matches
         .get_many::<String>("urls")
         .map(|values| values.cloned().collect())
@@ -258,7 +259,7 @@ fn execute_wherefroms(matches: &ArgMatches) -> Result<()> {
 }
 
 fn execute_comment(matches: &ArgMatches) -> Result<()> {
-    let path = file(matches);
+    let path = required_path(matches, "file");
     let text = matches
         .get_one::<String>("text")
         .map(String::as_str)
@@ -267,33 +268,28 @@ fn execute_comment(matches: &ArgMatches) -> Result<()> {
 }
 
 fn execute_tag(matches: &ArgMatches) -> Result<()> {
-    let path = file(matches);
+    let path = required_path(matches, "file");
     if let Some(color) = matches.get_one::<String>("color") {
         xattr::set_finder_tag(path, color)?;
     }
     println!(
         "tag: {}",
-        xattr::finder_tag_name(xattr::get_finder_tag(path))
+        xattr::finder_tag_name(xattr::get_finder_tag(path)?)
     );
     Ok(())
 }
 
 fn execute_hide(matches: &ArgMatches) -> Result<()> {
-    let path = file(matches);
+    let path = required_path(matches, "file");
     if let Some(value) = matches.get_one::<String>("value") {
-        let hidden = match value.to_ascii_lowercase().as_str() {
-            "yes" | "true" | "on" | "1" => true,
-            "no" | "false" | "off" | "0" => false,
-            other => return Err(Error::new(format!("expected yes/no, got {other:?}"))),
-        };
-        xattr::set_hidden(path, hidden)?;
+        xattr::set_hidden(path, parse_yes_no(value)?)?;
     }
-    println!("hidden: {}", xattr::is_hidden(path));
+    println!("hidden: {}", xattr::is_hidden(path)?);
     Ok(())
 }
 
 fn execute_resourcefork(matches: &ArgMatches) -> Result<()> {
-    let path = file(matches);
+    let path = required_path(matches, "file");
     if let Some(hex) = matches.get_one::<String>("hex") {
         let data = decode_hex(hex, "hex resource fork")?;
         xattr::set_resource_fork(path, &data)?;
@@ -306,33 +302,12 @@ fn execute_resourcefork(matches: &ArgMatches) -> Result<()> {
     Ok(())
 }
 
-fn file(matches: &ArgMatches) -> &std::path::Path {
-    matches
-        .get_one::<PathBuf>("file")
-        .expect("clap requires FILE")
-        .as_path()
-}
-
-fn decode_hex(hex: &str, what: &str) -> Result<Vec<u8>> {
-    if !hex.len().is_multiple_of(2) {
-        return Err(Error::new(format!("odd-length {what}")));
-    }
-    let mut out = Vec::with_capacity(hex.len() / 2);
-    for i in (0..hex.len()).step_by(2) {
-        out.push(
-            u8::from_str_radix(&hex[i..i + 2], 16)
-                .map_err(|_| Error::new(format!("invalid {what}")))?,
-        );
-    }
-    Ok(out)
-}
-
-fn fourcc_arg(s: &str) -> Result<[u8; 4]> {
-    let b = s.as_bytes();
-    if b.len() != 4 {
+fn fourcc_arg(value: &str) -> Result<[u8; 4]> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 4 || !bytes.is_ascii() {
         return Err(Error::new(format!(
-            "type/creator must be a four-character code, got {s:?}"
+            "type/creator must be a four-character ASCII code, got {value:?}"
         )));
     }
-    Ok([b[0], b[1], b[2], b[3]])
+    Ok([bytes[0], bytes[1], bytes[2], bytes[3]])
 }

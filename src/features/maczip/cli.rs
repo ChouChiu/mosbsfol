@@ -38,25 +38,31 @@ pub fn execute(matches: &ArgMatches) -> Result<()> {
         .clone();
     let output = match matches.get_one::<PathBuf>("output") {
         Some(path) => path.clone(),
-        None => {
-            let parent = dir.parent().unwrap_or_else(|| Path::new("."));
-            let name = dir.file_name().unwrap_or_default().to_string_lossy();
-            parent.join(format!("{name}.zip"))
-        }
+        None => default_output(&dir),
     };
     let dry_run = matches.get_flag("dry_run");
-    let (_, names) = maczip::build_maczip(&dir)?;
+
+    // Build exactly once, so --dry-run reports the same archive it would
+    // write (timestamps/xattrs cannot change in between).
+    let plan = maczip::build_maczip(&dir)?;
     if dry_run {
-        for name in names {
+        for name in &plan.names {
             println!("would add {name}");
         }
         println!("would write {}", output.display());
         return Ok(());
     }
-    let written = maczip::write_maczip(&dir, &output)?;
+
+    maczip::write_plan(&plan, &output)?;
     println!("🗜️  wrote {}", output.display());
-    for name in written {
+    for name in &plan.names {
         println!("   {name}");
     }
     Ok(())
+}
+
+fn default_output(dir: &Path) -> PathBuf {
+    let parent = dir.parent().unwrap_or_else(|| Path::new("."));
+    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+    parent.join(format!("{name}.zip"))
 }

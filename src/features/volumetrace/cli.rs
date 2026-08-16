@@ -2,12 +2,10 @@
 
 //! CLI command owned by the `volumetrace` feature.
 
-use std::path::PathBuf;
-
 use clap::{ArgMatches, Command};
 
 use super as volumetrace;
-use crate::shared::cli::{dry_run_flag, path_arg};
+use crate::shared::cli::{dry_run_flag, optional_path, path_arg};
 use crate::shared::util::Result;
 
 pub fn command() -> Command {
@@ -37,22 +35,19 @@ pub fn execute(matches: &ArgMatches) -> Result<()> {
             "usage: mosbsfol trace <poop|clean> [PATH] [--dry-run]",
         ));
     };
-    let path = matches
-        .get_one::<PathBuf>("path")
-        .cloned()
-        .unwrap_or_else(|| PathBuf::from("."));
+    let path = optional_path(matches);
     let dry_run = matches.get_flag("dry_run");
 
     match subcommand {
         "poop" | "make" => {
-            for p in volumetrace::poop_volume(&path, dry_run)? {
-                println!("💩 created {}", p.display());
+            for created in volumetrace::poop_volume(&path, dry_run)? {
+                println!("💩 created {}", created.display());
             }
             Ok(())
         }
         "clean" => {
-            for p in volumetrace::clean_volume(&path, dry_run)? {
-                println!("removed {}", p.display());
+            for removed in volumetrace::clean_volume(&path, dry_run)? {
+                println!("removed {}", removed.display());
             }
             Ok(())
         }

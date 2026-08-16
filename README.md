@@ -24,8 +24,9 @@
   `.TemporaryItems`、`.localized`、`.VolumeIcon.icns`、`Icon\r`
 
 特性按标准 Feature-Driven 组织，每个行为对应一个 Cargo feature。
-通用格式、系统 API、命令行解析与错误处理使用成熟 crate（`clap`、`plist`、`zip`、`xattr`、`base64`、`uuid`、`libc`、`thiserror`、`anyhow`），
-项目自身只保留 macOS 特有逻辑，不重复造轮子。
+通用格式、系统 API 与命令行解析使用成熟 crate（`clap`、`plist`、`zip`、`xattr`、`base64`、`uuid`），
+错误类型与目录遍历等基础代码由项目自身维护，macOS 特有逻辑不重复造轮子。
+所有可选依赖都通过 Cargo feature 门控：`--no-default-features` 时只保留 `clap`。
 
 ---
 
@@ -159,12 +160,13 @@ src/
 ├── main.rs                        薄启动器：收集参数 -> core::cli
 ├── lib.rs                         feature 门控的库入口与 re-export
 ├── core/
-│   └── cli.rs                     clap 根命令组装；anyhow 错误边界
+│   └── cli.rs                     clap 根命令组装与 feature 门控分发
 ├── shared/
 │   ├── bplist.rs                  bplist00 / plist 薄封装（plist crate）
 │   ├── cli.rs                     clap 参数构建器
+│   ├── fs.rs                      目录遍历 / symlink 判断
 │   ├── mac.rs                     FInfo/FXInfo、type code、痕迹判定
-│   └── util.rs                    UTF-16BE、FourCC、对齐；thiserror Error
+│   └── util.rs                    Error、UTF-16BE、FourCC、对齐、hex
 ├── features/
 │   ├── dsstore/
 │   │   ├── format.rs              Bud1 + buddy allocator + B-tree
@@ -197,14 +199,11 @@ src/
 | crate | 用途 |
 | --- | --- |
 | [`clap`](https://docs.rs/clap) | 根命令、子命令、别名与 `--help` / `--version` |
-| [`thiserror`](https://docs.rs/thiserror) | 库侧 `shared::util::Error` 的派生与 `?` 转换 |
-| [`anyhow`](https://docs.rs/anyhow) | CLI 入口/分发层的错误聚合与上报 |
 | [`plist`](https://docs.rs/plist) | XML 与 `bplist00` property list 的读写 |
 | [`zip`](https://docs.rs/zip) | `__MACOSX` stored-ZIP 的写出（`default-features = false` + `time`） |
 | [`xattr`](https://docs.rs/xattr) | Linux 扩展属性 `l*` 系列调用 |
 | [`base64`](https://docs.rs/base64) | `plist write @base64:...` 参数解码 |
 | [`uuid`](https://docs.rs/uuid) | quarantine / `.fseventsd-uuid` / Spotlight Store UUID |
-| [`libc`](https://docs.rs/libc) | `.Trashes/<uid>` 所需 `getuid` |
 
 这些依赖只覆盖通用能力；`.DS_Store`、AppleDouble 等 macOS
 专有格式仍在本仓库内实现。

@@ -80,8 +80,7 @@ pub fn execute(matches: &ArgMatches) -> Result<()> {
             let file = matches
                 .get_one::<PathBuf>("file")
                 .expect("clap requires FILE");
-            let value = plist::read_file(file)?;
-            println!("{}", bplist::to_json(&value));
+            println!("{}", bplist::to_json(&plist::read_file(file)?));
             Ok(())
         }
         Some((other, _)) => Err(crate::shared::util::Error::new(format!(
