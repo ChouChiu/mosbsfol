@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# MOSBSFOL autopoop udev rule.
+#
+# Install:
+#   sudo cp packaging/udev/99-mosbsfol-autopoop.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload
+#   sudo udevadm trigger
+#
+# Switch:
+#   sudo mosbsfol autopoop enable  --state /run/mosbsfol/autopoop/state
+#   sudo mosbsfol autopoop disable --state /run/mosbsfol/autopoop/state
+#   sudo mosbsfol autopoop status  --state /run/mosbsfol/autopoop/state
+#
+# The helper checks sysfs `removable` and the filesystem type itself, so
+# this broad match is safe: internal disks are detected and skipped by the
+# trigger.  The local machine is covered by the daemon (`autopoop run`);
+# add `--include-local` below if you want udev to poop fixed disks too.
+# `%M:%m` is the kernel device number (e.g. 8:17 for /dev/sdb1).
+
+ACTION=="add", SUBSYSTEM=="block", KERNEL!="loop*", KERNEL!="ram*", KERNEL!="zram*", \
+  RUN+="/usr/bin/mosbsfol autopoop trigger %M:%m --state /run/mosbsfol/autopoop/state"

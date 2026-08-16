@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# MOSBSFOL autopoop polling daemon (optional fallback / companion to the
+# udev rule; running both is harmless because the poop operation is
+# idempotent).
+#
+# Install:
+#   sudo cp packaging/systemd/mosbsfol-autopoop.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mosbsfol-autopoop
+#
+# Switch:
+#   sudo mosbsfol autopoop enable  --state /run/mosbsfol/autopoop/state
+#   sudo mosbsfol autopoop disable --state /run/mosbsfol/autopoop/state
+#   sudo mosbsfol autopoop status  --state /run/mosbsfol/autopoop/state
+
+[Unit]
+Description=MOSBSFOL autopoop: auto-drop macOS droppings on removable media and local disks
+Documentation=https://github.com/ChouChiu/mosbsfol
+After=local-fs.target
+
+[Service]
+Type=simple
+# By default the daemon also poops local fixed disks (non-recursively)
+# and re-pooops their roots hourly.  Add --local-recursive for a recursive
+# local tree, adjust --local-rescan, or use --no-local to only watch
+# removable media.
+ExecStart=/usr/bin/mosbsfol autopoop run --interval 2 --local-rescan 3600 --state /run/mosbsfol/autopoop/state
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

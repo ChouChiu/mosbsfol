@@ -5,7 +5,8 @@
     feature = "dsstore",
     feature = "maczip",
     feature = "plist",
-    feature = "volumetrace"
+    feature = "volumetrace",
+    feature = "autopoop"
 ))]
 
 use std::fs;
@@ -115,6 +116,138 @@ fn usb_creates_macos_droppings() {
     assert!(sidecar.is_file());
     let data = fs::read(&sidecar).unwrap();
     assert_eq!(&data[0..4], &[0x00, 0x05, 0x16, 0x07]);
+}
+
+#[cfg(feature = "autopoop")]
+#[test]
+fn autopoop_switch_toggles_with_state_file() {
+    let dir = tmp("autopoop-state");
+    let state = dir.join("state");
+    let state = state.to_str().unwrap();
+
+    let out = bin()
+        .args(["autopoop", "status", "--state", state])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("DISABLED"));
+
+    let out = bin()
+        .args(["autopoop", "enable", "--state", state])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let out = bin()
+        .args(["autopoop", "status", "--state", state])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("ENABLED"));
+
+    let out = bin()
+        .args(["autopoop", "disable", "--state", state])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(!std::path::Path::new(state).exists());
+}
+
+#[cfg(feature = "autopoop")]
+#[test]
+fn autopoop_once_force_poops_path() {
+    let dir = tmp("autopoop-once");
+    let state = dir.join("state");
+    fs::write(dir.join("file.txt"), b"x").unwrap();
+
+    let out = bin()
+        .args([
+            "autopoop",
+            "once",
+            dir.to_str().unwrap(),
+            "--state",
+            state.to_str().unwrap(),
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(dir.join(".DS_Store").is_file());
+    let sidecar = dir.join("._file.txt");
+    assert!(sidecar.is_file());
+    let data = fs::read(&sidecar).unwrap();
+    assert_eq!(&data[0..4], &[0x00, 0x05, 0x16, 0x07]);
+}
+
+#[cfg(feature = "autopoop")]
+#[test]
+fn autopoop_once_obeys_disabled_switch() {
+    let dir = tmp("autopoop-disabled");
+    let state = dir.join("state");
+    fs::write(dir.join("file.txt"), b"x").unwrap();
+
+    let out = bin()
+        .args([
+            "autopoop",
+            "once",
+            dir.to_str().unwrap(),
+            "--state",
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(!dir.join(".DS_Store").exists());
+    assert!(!dir.join("._file.txt").exists());
+}
+
+#[cfg(feature = "autopoop")]
+#[test]
+fn autopoop_local_poops_dsstore_without_sidecars() {
+    let dir = tmp("autopoop-local");
+    let state = dir.join("state");
+    fs::write(dir.join("file.txt"), b"x").unwrap();
+    fs::create_dir(dir.join("sub")).unwrap();
+    fs::write(dir.join("sub/deep.txt"), b"x").unwrap();
+
+    let out = bin()
+        .args([
+            "autopoop",
+            "local",
+            dir.to_str().unwrap(),
+            "--force",
+            "--state",
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(dir.join(".DS_Store").is_file());
+    assert!(!dir.join("._file.txt").exists());
+    assert!(!dir.join("sub/.DS_Store").exists());
+
+    let out = bin()
+        .args([
+            "autopoop",
+            "local",
+            dir.to_str().unwrap(),
+            "-r",
+            "--force",
+            "--state",
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(dir.join("sub/.DS_Store").is_file());
+    assert!(!dir.join("sub/._deep.txt").exists());
 }
 
 #[cfg(feature = "plist")]

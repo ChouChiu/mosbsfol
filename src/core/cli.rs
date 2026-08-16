@@ -56,6 +56,8 @@ Run `mosbsfol --help` for usage.",
 #[allow(unused_variables)]
 fn dispatch(name: &str, matches: &clap::ArgMatches) -> Result<()> {
     match name {
+        #[cfg(feature = "autopoop")]
+        "autopoop" | "daemon" => crate::features::autopoop::cli::execute(matches),
         #[cfg(feature = "dsstore")]
         "dsstore" => crate::features::dsstore::cli::execute(matches),
         #[cfg(feature = "dsstore")]
@@ -91,6 +93,11 @@ fn root_command() -> Command {
         .subcommand_required(true)
         .arg_required_else_help(true)
         .disable_help_subcommand(true);
+
+    #[cfg(feature = "autopoop")]
+    {
+        cmd = cmd.subcommand(crate::features::autopoop::cli::command());
+    }
 
     #[cfg(feature = "dsstore")]
     {

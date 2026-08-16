@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 cargo fmt --check
 
-features=(dsstore appledouble maczip plist xattr volumetrace)
+features=(dsstore appledouble maczip plist xattr volumetrace autopoop)
 n=${#features[@]}
 total=$((1 << n))
 

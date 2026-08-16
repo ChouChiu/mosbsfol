@@ -13,9 +13,10 @@ documentation = "https://docs.rs/mosbsfol"
 # Optional dependencies are declared with `dep:<crate>` so that a build
 # with no features enabled only needs clap.
 [features]
-default = ["dsstore", "appledouble", "maczip", "plist", "xattr", "volumetrace"]
+default = ["dsstore", "appledouble", "maczip", "plist", "xattr", "volumetrace", "autopoop"]
 dsstore = ["dep:plist"]
 appledouble = []
+autopoop = ["appledouble", "dsstore"]
 maczip = ["appledouble", "dep:zip"]
 plist = ["dep:base64", "dep:plist"]
 xattr = ["dep:xattr", "dep:uuid", "dep:plist"]

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# MOSBSFOL 手工验收脚本：从源码构建并逐项检查六项 macOS 特性。
+# MOSBSFOL 手工验收脚本：从源码构建并逐项检查六项 macOS 特性，以及 autopoop 对可移动设备与本机的自动拉屎。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -65,6 +65,36 @@ assert 'a.txt' in names, sorted(names)
 assert '__MACOSX/._a.txt' in names, sorted(names)
 PY
 pass "maczip / __MACOSX AppleDouble entries"
+
+# 6. autopoop：开关 + once + trigger 所需的全套痕迹
+mkdir -p "$WORK/auto"
+echo auto > "$WORK/auto/file.txt"
+AUTOPOOP_STATE="$WORK/autopoop.state"
+"$BIN" autopoop status --state "$AUTOPOOP_STATE" | grep -q 'DISABLED' || fail "autopoop should default to disabled"
+"$BIN" autopoop once "$WORK/auto" --state "$AUTOPOOP_STATE" >/dev/null
+[ ! -f "$WORK/auto/.DS_Store" ] || fail "disabled autopoop should not poop"
+"$BIN" autopoop enable --state "$AUTOPOOP_STATE" >/dev/null
+"$BIN" autopoop status --state "$AUTOPOOP_STATE" | grep -q 'ENABLED' || fail "autopoop enable did not stick"
+"$BIN" autopoop once "$WORK/auto" --state "$AUTOPOOP_STATE" >/dev/null
+[ -f "$WORK/auto/.DS_Store" ] || fail "autopoop once missing .DS_Store"
+[ -f "$WORK/auto/._file.txt" ] || fail "autopoop once missing ._file.txt sidecar"
+[ "$(xxd -p -l 4 "$WORK/auto/._file.txt")" = "00051607" ] || fail "autopoop bad AppleDouble magic"
+"$BIN" autopoop disable --state "$AUTOPOOP_STATE" >/dev/null
+[ ! -f "$AUTOPOOP_STATE" ] || fail "autopoop disable should remove the state file"
+pass "autopoop enable/disable/once"
+
+# 7. autopoop local：本机风格只拉 .DS_Store + 卷痕迹，不拉 ._* 侧车
+mkdir -p "$WORK/local/sub"
+echo local > "$WORK/local/file.txt"
+echo deep > "$WORK/local/sub/deep.txt"
+"$BIN" autopoop local "$WORK/local" --force --state "$AUTOPOOP_STATE" >/dev/null
+[ -f "$WORK/local/.DS_Store" ] || fail "autopoop local missing .DS_Store"
+[ ! -f "$WORK/local/._file.txt" ] || fail "autopoop local must not create AppleDouble sidecars"
+[ ! -f "$WORK/local/sub/.DS_Store" ] || fail "autopoop local should be non-recursive by default"
+"$BIN" autopoop local "$WORK/local" -r --force --state "$AUTOPOOP_STATE" >/dev/null
+[ -f "$WORK/local/sub/.DS_Store" ] || fail "autopoop local -r missing recursive .DS_Store"
+[ ! -f "$WORK/local/sub/._deep.txt" ] || fail "autopoop local -r must not create AppleDouble sidecars"
+pass "autopoop local non-recursive / recursive"
 
 echo
 echo "All MOSBSFOL acceptance checks passed."

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`mosbsfol` (MOSBSFOL — "macOS Bull Shit Feature On Linux") is a Rust CLI that recreates six macOS filesystem behaviors on Linux for compatibility testing: `.DS_Store` Finder metadata, AppleDouble `._*` sidecars, `__MACOSX/` Finder-style ZIPs, XML/`bplist00` property lists, `com.apple.*` extended attributes, and volume-root droppings (`.Spotlight-V100`, `.fseventsd`, `.Trashes`, …). Every behavior is a Cargo feature, all enabled by default. Common formats and OS APIs are delegated to mature crates (`clap`, `plist`, `zip`, `xattr`, `base64`, `uuid`); the macOS-specific logic lives in this repo.
+`mosbsfol` (MOSBSFOL — "macOS Bull Shit Feature On Linux") is a Rust CLI that recreates six macOS filesystem behaviors on Linux for compatibility testing, plus a switchable `autopoop` automation layer that drops the USB suite automatically when removable media is inserted and the local-disk suite on the host machine: `.DS_Store` Finder metadata, AppleDouble `._*` sidecars, `__MACOSX/` Finder-style ZIPs, XML/`bplist00` property lists, `com.apple.*` extended attributes, and volume-root droppings (`.Spotlight-V100`, `.fseventsd`, `.Trashes`, …). The `autopoop` feature adds a foreground daemon, a udev-trigger subcommand, local fixed-disk scanning, and a runtime on/off state file (no kernel module). Every behavior is a Cargo feature, all enabled by default; `autopoop` implies `appledouble` + `dsstore` in Cargo.toml. Common formats and OS APIs are delegated to mature crates (`clap`, `plist`, `zip`, `xattr`, `base64`, `uuid`); the macOS-specific logic lives in this repo.
 
 ## Architecture & Data Flow
 
@@ -31,7 +31,10 @@ main.rs (collect OsString args losslessly)
 | `src/core/` | CLI bootstrap: `cli.rs` builds the root clap command and feature-gated dispatch |
 | `src/shared/` | Cross-feature infrastructure: `util.rs` (Error/helpers), `fs.rs` (traversal/symlinks), `cli.rs` (clap arg builders), `mac.rs` (FInfo/FXInfo, type codes, trace detection), `bplist.rs` (plist wrapper) |
 | `src/features/` | One directory per macOS behavior, gated in `mod.rs` via `#[cfg(feature = "...")] pub mod <name>;` |
+| `src/features/autopoop/` | `autopoop` automation: `/proc/self/mountinfo` + sysfs scanning, removable USB suite + local HFS-style suite, periodic local rescan daemon, runtime switch, udev trigger logic |
 | `src/features/dsstore/` | `.DS_Store` binary format (Bud1 + buddy allocator + B-tree), Finder record generation |
+| `packaging/udev/` | `99-mosbsfol-autopoop.rules`: block `add` events call `mosbsfol autopoop trigger %M:%m` |
+| `packaging/systemd/` | `mosbsfol-autopoop.service`: optional polling daemon service |
 | `tests/` | Integration tests (`cli.rs`) |
 | `scripts/` | `check-features.sh` (feature-matrix check), `acceptance.sh` (end-to-end validation) |
 
@@ -40,6 +43,7 @@ main.rs (collect OsString args losslessly)
 ```sh
 cargo build --release                     # full binary
 cargo build --no-default-features --features dsstore   # feature subset
+cargo build --no-default-features --features autopoop  # daemon (implies dsstore+appledouble)
 cargo run -- usb /mnt/usb -r --include-dirs --type-codes
 cargo install --path .                    # install to ~/.cargo/bin
 
@@ -47,7 +51,7 @@ cargo fmt --check                         # formatting (no rustfmt.toml; default
 cargo clippy --all-targets -- -D warnings # lint (no clippy.toml; defaults)
 cargo test                                # unit + integration tests
 
-./scripts/check-features.sh               # 64-combination `cargo check` + sampled `cargo test`
+./scripts/check-features.sh               # 128-combination `cargo check` + sampled `cargo test`
 ./scripts/acceptance.sh                   # end-to-end acceptance (builds release, validates output)
 ```
 
@@ -90,6 +94,6 @@ cargo test                                # unit + integration tests
 
 - **Framework**: Rust built-in `#[test]` only — no `assert_cmd`/`tempfile`/`proptest` dev-dependencies. Integration tests invoke the compiled binary via `std::process::Command` using `env!("CARGO_BIN_EXE_mosbsfol")`.
 - **Unit tests**: inline `#[cfg(test)] mod tests` in every module (temp-dir integration-style tests included).
-- **Integration tests** (`tests/cli.rs`): file-level gate `#![cfg(any(feature = "dsstore", feature = "maczip", feature = "plist", feature = "volumetrace"))]` — note `appledouble` and `xattr` are **not** in that list, so the file is empty for those features. Each test is independently `cfg`-gated. Tests assert `status.success()` plus stdout substring / magic-byte / file-existence checks via a `tmp()` helper.
+- **Integration tests** (`tests/cli.rs`): file-level gate `#![cfg(any(feature = "dsstore", feature = "maczip", feature = "plist", feature = "volumetrace", feature = "autopoop"))]` — note `appledouble` and `xattr` are **not** in that list, so the file is empty for those features. Each test is independently `cfg`-gated. Tests assert `status.success()` plus stdout substring / magic-byte / file-existence checks via a `tmp()` helper.
 - **QA scripts**: `scripts/acceptance.sh` builds `--release` and validates real output (magic bytes via `xxd`, text via `grep -q`, ZIP entries via a Python `zipfile` heredoc) with `set -euo pipefail` and `pass()`/`fail()` helpers; the xattr section self-skips (`[SKIP]`) when the filesystem lacks `user` xattr support rather than failing.
-- **Coverage expectation**: all 64 feature combinations must `cargo check` clean (`scripts/check-features.sh`, no always-exit-0 trap — failures propagate as non-zero exit). Cross-validation notes in README reference Python `plistlib`/`zipfile`/independent DS_Store parsers; no coverage metric is enforced.
+- **Coverage expectation**: all 128 feature combinations must `cargo check` clean (`scripts/check-features.sh`, no always-exit-0 trap — failures propagate as non-zero exit). `autopoop` unit tests cover mountinfo parsing, mount classification, state toggling, device-spec parsing, USB-suite pooping, and local-suite pooping; CLI integration tests cover the switch, `once`, and `local` behavior. Cross-validation notes in README reference Python `plistlib`/`zipfile`/independent DS_Store parsers; no coverage metric is enforced.
